@@ -19,6 +19,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -72,11 +73,11 @@ class CollectionBuilderViewModel @Inject constructor(
     }
 
     fun setPreferClassics(value: Boolean) {
-        _uiState.value = _uiState.value.copy(preferClassics = value)
+        _uiState.value = _uiState.value.copy(preferClassics = value, recommendations = emptyList())
     }
 
     fun setPreferCollections(value: Boolean) {
-        _uiState.value = _uiState.value.copy(preferCollections = value)
+        _uiState.value = _uiState.value.copy(preferCollections = value, recommendations = emptyList())
     }
 
     fun clearRecommendations() {
@@ -111,11 +112,11 @@ class CollectionBuilderViewModel @Inject constructor(
                         .take(30)
                 }
             }
-            result.onSuccess { items ->
+            result.onSuccess { found ->
                 _uiState.value = _uiState.value.copy(
                     isSearching = false,
-                    searchResults = items,
-                    error = if (items.isEmpty()) "No matching results found." else null,
+                    searchResults = found,
+                    error = if (found.isEmpty()) "No matching results found." else null,
                 )
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
@@ -155,15 +156,15 @@ class CollectionBuilderViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isGenerating = true, error = null)
             val result = runCatching {
-                withContext(Dispatchers.IO) {
-                    buildRecommendations(_uiState.value)
-                }
+                withContext(Dispatchers.IO) { buildRecommendations(_uiState.value) }
             }
             result.onSuccess { recommendations ->
                 _uiState.value = _uiState.value.copy(
                     isGenerating = false,
                     recommendations = recommendations,
-                    error = if (recommendations.isEmpty()) "No album recommendations were found for these picks." else null,
+                    error = if (recommendations.isEmpty()) {
+                        "No album recommendations were found for these picks."
+                    } else null,
                 )
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
@@ -192,6 +193,8 @@ class CollectionBuilderViewModel @Inject constructor(
 
         val candidateAlbums = linkedMapOf<String, AlbumItem>()
         val popularityRank = mutableMapOf<String, Int>()
+        val radioAlbumRelations = mutableMapOf<String, MutableSet<String>>()
+        val radioSongRelations = mutableMapOf<String, MutableSet<String>>()
 
         runCatching { zemerRepository.homeRows(options) }.getOrNull()?.albums.orEmpty()
             .forEachIndexed { index, album ->
@@ -208,19 +211,30 @@ class CollectionBuilderViewModel @Inject constructor(
                 .forEach { candidateAlbums.putIfAbsent(it.id, it) }
         }
 
-        // A seed album can carry a usable artist even when the explicit artist wasn't selected.
-        state.selectedAlbums.flatMap { it.artists.orEmpty() }
-            .mapNotNull { it.id }
-            .distinct()
-            .take(8)
-            .forEach { artistId ->
-                runCatching { zemerRepository.artist(artistId, options) }.getOrNull()
-                    ?.sections
-                    .orEmpty()
-                    .flatMap { it.items }
-                    .filterIsInstance<AlbumItem>()
-                    .forEach { candidateAlbums.putIfAbsent(it.id, it) }
-            }
+        // Radio is Zemer's existing related-content signal. Turn the albums referenced by related
+        // songs into full album candidates so song/album seeds influence more than raw popularity.
+        state.selectedSongs.take(8).forEach { seedSong ->
+            val related = runCatching { zemerRepository.radio("song", seedSong.id, options) }
+                .getOrNull()?.songs.orEmpty()
+            addAlbumsFromRelatedSongs(
+                relatedSongs = related,
+                seedId = seedSong.id,
+                relationMap = radioSongRelations,
+                candidateAlbums = candidateAlbums,
+                options = options,
+            )
+        }
+        state.selectedAlbums.take(8).forEach { seedAlbum ->
+            val related = runCatching { zemerRepository.radio("album", seedAlbum.id, options) }
+                .getOrNull()?.songs.orEmpty()
+            addAlbumsFromRelatedSongs(
+                relatedSongs = related,
+                seedId = seedAlbum.id,
+                relationMap = radioAlbumRelations,
+                candidateAlbums = candidateAlbums,
+                options = options,
+            )
+        }
 
         val seed = CollectionSeed(
             artistIds = selectedArtistIds,
@@ -230,17 +244,17 @@ class CollectionBuilderViewModel @Inject constructor(
 
         val candidateModels = candidateAlbums.values.map { album ->
             val artistIds = album.artists.orEmpty().mapNotNull { it.id }.toSet()
-            val relatedAlbums = selectedAlbumArtistIds
+            val artistRelatedAlbums = selectedAlbumArtistIds
                 .filterValues { ids -> ids.isNotEmpty() && artistIds.intersect(ids).isNotEmpty() }
                 .keys
-            val relatedSongs = selectedSongArtistIds
+            val artistRelatedSongs = selectedSongArtistIds
                 .filterValues { ids -> ids.isNotEmpty() && artistIds.intersect(ids).isNotEmpty() }
                 .keys
             AlbumRecommendationCandidate(
                 albumId = album.id,
                 artistIds = artistIds,
-                relatedToAlbumIds = relatedAlbums,
-                relatedToSongIds = relatedSongs,
+                relatedToAlbumIds = artistRelatedAlbums + radioAlbumRelations[album.id].orEmpty(),
+                relatedToSongIds = artistRelatedSongs + radioSongRelations[album.id].orEmpty(),
                 popularityRank = popularityRank[album.id],
                 releaseYear = album.year.takeIf { state.preferClassics },
                 isCompilation = state.preferCollections && album.looksLikeCollection(),
@@ -251,6 +265,27 @@ class CollectionBuilderViewModel @Inject constructor(
             .mapNotNull { ranked ->
                 candidateAlbums[ranked.candidate.albumId]?.let { album ->
                     CollectionRecommendationUi(album, ranked.score, ranked.reasons)
+                }
+            }
+    }
+
+    private suspend fun addAlbumsFromRelatedSongs(
+        relatedSongs: List<SongItem>,
+        seedId: String,
+        relationMap: MutableMap<String, MutableSet<String>>,
+        candidateAlbums: MutableMap<String, AlbumItem>,
+        options: com.jtech.zemer.search.ZemerSearchOptions,
+    ) {
+        relatedSongs.mapNotNull { it.album?.id }
+            .distinct()
+            .take(16)
+            .forEach { albumId ->
+                relationMap.getOrPut(albumId) { mutableSetOf() }.add(seedId)
+                if (albumId !in candidateAlbums) {
+                    runCatching { zemerRepository.album(albumId, null, options) }
+                        .getOrNull()
+                        ?.album
+                        ?.let { candidateAlbums[albumId] = it }
                 }
             }
     }
@@ -274,7 +309,14 @@ class CollectionBuilderViewModel @Inject constructor(
                                 zemerRepository.album(album.id, album.playlistId, options)?.let { page ->
                                     database.transaction { insert(page) }
                                 }
-                                songs = database.albumWithSongs(albumId).first()?.songs.orEmpty()
+                                // MusicDatabase.transaction dispatches to Room's transaction executor.
+                                // Wait briefly for that insert rather than turning a fast first tap into
+                                // an empty bulk-download request.
+                                repeat(24) {
+                                    if (songs.isNotEmpty()) return@repeat
+                                    delay(75)
+                                    songs = database.albumWithSongs(albumId).first()?.songs.orEmpty()
+                                }
                             }
                         }
                         songs
@@ -302,5 +344,14 @@ private fun <T : YTItem> List<T>.toggleById(item: T): List<T> =
 
 private fun AlbumItem.looksLikeCollection(): Boolean {
     val normalized = title.lowercase()
-    return listOf("collection", "best of", "greatest", "hits", "anthology", "vol.", "volume").any(normalized::contains)
+    return listOf(
+        "collection",
+        "best of",
+        "greatest",
+        "hits",
+        "anthology",
+        "vol.",
+        "volume",
+        "those were the days",
+    ).any(normalized::contains)
 }
