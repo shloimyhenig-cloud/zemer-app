@@ -70,7 +70,7 @@ fun LibraryScreen(navController: NavController) {
                 onClick = { navController.navigate("collection_builder") },
                 modifier = Modifier.padding(end = 8.dp),
             ) {
-                Text("Build My Collection")
+                Text(stringResource(R.string.collection_build_title))
             }
         }
     }
