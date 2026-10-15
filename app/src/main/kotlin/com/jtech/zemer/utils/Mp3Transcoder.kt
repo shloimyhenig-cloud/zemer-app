@@ -40,9 +40,9 @@ object Mp3Transcoder {
         outputFile.delete()
 
         val extractor = MediaExtractor()
-        var decoder: MediaCodec? = null
+        var decoderForCleanup: MediaCodec? = null
         var lameStream: LameOutputStream? = null
-        var rawOutput: BufferedOutputStream? = null
+        var rawOutputForCleanup: BufferedOutputStream? = null
 
         try {
             extractor.setDataSource(inputFile.absolutePath)
@@ -53,11 +53,13 @@ object Mp3Transcoder {
             extractor.selectTrack(trackIndex)
             val sourceFormat = extractor.getTrackFormat(trackIndex)
             val mime = sourceFormat.getString(MediaFormat.KEY_MIME) ?: error("Audio MIME type missing")
-            decoder = MediaCodec.createDecoderByType(mime)
+            val decoder = MediaCodec.createDecoderByType(mime)
+            decoderForCleanup = decoder
             decoder.configure(sourceFormat, null, null, 0)
             decoder.start()
 
-            rawOutput = BufferedOutputStream(FileOutputStream(outputFile))
+            val rawOutput = BufferedOutputStream(FileOutputStream(outputFile))
+            rawOutputForCleanup = rawOutput
             rawOutput.write(Id3Writer.build(tags))
 
             val info = MediaCodec.BufferInfo()
@@ -75,7 +77,7 @@ object Mp3Transcoder {
                     channelCount,
                     sampleRate,
                     bitrateKbps,
-                    Lame.LameModel.JOINT_STEREO,
+                    if (channelCount == 1) Lame.LameModel.MONO else Lame.LameModel.JOINT_STEREO,
                     Lame.LameQuality.NEAR_BEST,
                 )
                 lameStream = LameOutputStream(lame, rawOutput, PCM_SHORT_BUFFER_SIZE)
@@ -139,14 +141,14 @@ object Mp3Transcoder {
             ensureEncoder()
             lameStream?.close()
             lameStream = null
-            rawOutput = null // closed by LameOutputStream
+            rawOutputForCleanup = null // LameOutputStream closes the wrapped output stream.
 
             require(outputFile.exists() && outputFile.length() > 0L) { "MP3 encoder produced an empty file" }
         } finally {
             runCatching { lameStream?.close() }
-            runCatching { rawOutput?.close() }
-            runCatching { decoder?.stop() }
-            runCatching { decoder?.release() }
+            runCatching { rawOutputForCleanup?.close() }
+            runCatching { decoderForCleanup?.stop() }
+            runCatching { decoderForCleanup?.release() }
             runCatching { extractor.release() }
             if (!outputFile.exists() || outputFile.length() == 0L) outputFile.delete()
         }
