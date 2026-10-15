@@ -1,147 +1,255 @@
 package com.jtech.zemer.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
+import com.jtech.zemer.LocalDownloadUtil
+import com.jtech.zemer.search.zemerAlbumRoute
+import com.jtech.zemer.viewmodels.CollectionBuilderViewModel
+import com.jtech.zemer.viewmodels.CollectionPickKind
+import com.metrolist.innertube.models.AlbumItem
+import com.metrolist.innertube.models.ArtistItem
+import com.metrolist.innertube.models.SongItem
+import com.metrolist.innertube.models.YTItem
 
-/**
- * First UI surface for the personalized full-album collection builder.
- *
- * The picker buttons intentionally route into Zemer's existing catalog search instead of creating a
- * second catalog. The next integration step persists picks and feeds album candidates into
- * CollectionRecommendationRanker, then opens selected results through the normal album/download flow.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CollectionBuilderScreen(navController: NavController) {
-    var preferClassics by remember { mutableStateOf(true) }
-    var preferCollections by remember { mutableStateOf(true) }
+fun CollectionBuilderScreen(
+    navController: NavController,
+    viewModel: CollectionBuilderViewModel = hiltViewModel(),
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val downloadUtil = LocalDownloadUtil.current
 
     Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("Build My Collection") })
-        },
+        topBar = { TopAppBar(title = { Text("Build My Collection") }) },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Text(
-                "Tell Zemer what you love. We’ll recommend complete albums, then you choose what to download.",
-                style = MaterialTheme.typography.bodyLarge,
-            )
-
-            CollectionStepCard(
-                number = 1,
-                title = "Pick favorite artists",
-                description = "Choose about 3–5 singers you really like.",
-                button = "Choose Artists",
-                onClick = { navController.navigate(Screens.Artists.route) },
-            )
-            CollectionStepCard(
-                number = 2,
-                title = "Pick favorite albums",
-                description = "Choose about 3–5 CDs that match your taste.",
-                button = "Find Albums",
-                onClick = { navController.navigate(Screens.Search.route) },
-            )
-            CollectionStepCard(
-                number = 3,
-                title = "Pick favorite songs",
-                description = "A few favorite songs help fine-tune the recommendations.",
-                button = "Find Songs",
-                onClick = { navController.navigate(Screens.Search.route) },
-            )
-
-            Text("Collection style", fontWeight = FontWeight.Bold)
-            PreferenceRow(
-                text = "Favor classics and established CDs",
-                checked = preferClassics,
-                onCheckedChange = { preferClassics = it },
-            )
-            PreferenceRow(
-                text = "Include collection / compilation albums",
-                checked = preferCollections,
-                onCheckedChange = { preferCollections = it },
-            )
-
-            Button(
-                onClick = { /* Wired after seed persistence/candidate adapter is added. */ },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = false,
+        if (state.recommendations.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Generate Recommendations")
+                OutlinedButton(onClick = viewModel::clearRecommendations) {
+                    Text("Change my favorites")
+                }
+                if (state.isPreparingDownloads) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        CircularProgressIndicator()
+                        Text("Preparing full albums…")
+                    }
+                }
+                state.error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error)
+                }
+                val albumResults = state.recommendations.map { recommendation ->
+                    CollectionAlbumResult(
+                        albumId = recommendation.album.id,
+                        title = recommendation.album.title,
+                        artist = recommendation.album.artists.orEmpty().joinToString { it.name }
+                            .ifBlank { "Album" },
+                        score = recommendation.score,
+                        reasons = recommendation.reasons,
+                    )
+                }
+                CollectionRecommendationResults(
+                    albums = albumResults,
+                    onOpenAlbum = { albumId ->
+                        state.recommendations.firstOrNull { it.album.id == albumId }?.album?.let { album ->
+                            navController.navigate(zemerAlbumRoute(album))
+                        }
+                    },
+                    onDownloadSelected = { albumIds ->
+                        viewModel.prepareSongsForDownload(albumIds) { songs ->
+                            songs.forEach { downloadUtil.downloadToMediaStore(it) }
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                )
             }
-            Text(
-                "Recommendation generation will unlock after your picks are connected.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Pick a few favorites. Zemer will use its real catalog, artist albums and popular albums to recommend complete CDs.",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CollectionPickKind.entries.forEach { kind ->
+                        FilterChip(
+                            selected = state.pickKind == kind,
+                            onClick = { viewModel.setPickKind(kind) },
+                            label = {
+                                Text(
+                                    when (kind) {
+                                        CollectionPickKind.ARTIST -> "Artists"
+                                        CollectionPickKind.ALBUM -> "Albums"
+                                        CollectionPickKind.SONG -> "Songs"
+                                    }
+                                )
+                            },
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = state.searchQuery,
+                    onValueChange = viewModel::setQuery,
+                    label = { Text("Search Zemer") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    onClick = viewModel::search,
+                    enabled = !state.isSearching,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (state.isSearching) {
+                        CircularProgressIndicator()
+                    } else {
+                        Text("Search ${state.pickKind.label()}")
+                    }
+                }
+
+                Text(
+                    "Selected: ${state.selectedArtists.size} artists • ${state.selectedAlbums.size} albums • ${state.selectedSongs.size} songs",
+                    fontWeight = FontWeight.Bold,
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = state.preferClassics,
+                        onCheckedChange = viewModel::setPreferClassics,
+                    )
+                    Text("Favor classic / established albums")
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = state.preferCollections,
+                        onCheckedChange = viewModel::setPreferCollections,
+                    )
+                    Text("Favor collections / best-of albums")
+                }
+
+                state.error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error)
+                }
+
+                Text("Search results", fontWeight = FontWeight.Bold)
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(state.searchResults, key = { "${state.pickKind}-${it.id}" }) { item ->
+                        CollectionPickRow(
+                            item = item,
+                            selected = when (item) {
+                                is ArtistItem -> state.selectedArtists.any { it.id == item.id }
+                                is AlbumItem -> state.selectedAlbums.any { it.id == item.id }
+                                is SongItem -> state.selectedSongs.any { it.id == item.id }
+                                else -> false
+                            },
+                            onToggle = { viewModel.toggleSelection(item) },
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = viewModel::generateRecommendations,
+                    enabled = state.selectionCount > 0 && !state.isGenerating,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (state.isGenerating) {
+                        CircularProgressIndicator()
+                    } else {
+                        Text("Generate Full-Album Recommendations")
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun CollectionStepCard(
-    number: Int,
-    title: String,
-    description: String,
-    button: String,
-    onClick: () -> Unit,
+private fun CollectionPickRow(
+    item: YTItem,
+    selected: Boolean,
+    onToggle: () -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("$number. $title", fontWeight = FontWeight.Bold)
-            Text(description)
-            OutlinedButton(onClick = onClick) { Text(button) }
-        }
-    }
-}
-
-@Composable
-private fun PreferenceRow(
-    text: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle),
     ) {
-        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
-        Spacer(Modifier.width(8.dp))
-        Text(text)
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = selected, onCheckedChange = { onToggle() })
+            Column(modifier = Modifier.weight(1f)) {
+                Text(item.title, fontWeight = FontWeight.Bold)
+                val subtitle = when (item) {
+                    is AlbumItem -> item.artists.orEmpty().joinToString { it.name } +
+                        (item.year?.let { " • $it" } ?: "")
+                    is SongItem -> item.artists.joinToString { it.name }
+                    is ArtistItem -> "Artist"
+                    else -> ""
+                }
+                if (subtitle.isNotBlank()) {
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
     }
+}
+
+private fun CollectionPickKind.label(): String = when (this) {
+    CollectionPickKind.ARTIST -> "artists"
+    CollectionPickKind.ALBUM -> "albums"
+    CollectionPickKind.SONG -> "songs"
 }
