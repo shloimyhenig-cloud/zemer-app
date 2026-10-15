@@ -102,6 +102,11 @@ constructor(
         mediaStoreDownloadManager.downloadSong(song, fromUser)
     }
 
+    /** Build My Collection: the normal download, saved as a real MP3 in Music/Zemer/<artist>/<album>/. */
+    fun downloadToMediaStoreAsMp3(song: com.jtech.zemer.db.entities.Song) {
+        mediaStoreDownloadManager.downloadSongAsMp3(song)
+    }
+
     /**
      * Download a video to MediaStore (Movies/Zemer folder)
      * This downloads the actual video file, not just audio.

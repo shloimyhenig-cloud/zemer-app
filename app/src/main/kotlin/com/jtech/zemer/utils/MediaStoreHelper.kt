@@ -535,6 +535,11 @@ class MediaStoreHelper(private val context: Context) {
      * @param extension File extension (e.g., "opus", "m4a")
      * @return MIME type string, or "audio/mpeg" as default
      */
+    /** True when [uri] is stored as an MP3 (MediaStore or SAF MIME type `audio/mpeg`). */
+    fun isMp3(uri: Uri): Boolean =
+        runCatching { context.contentResolver.getType(uri) }.getOrNull()
+            ?.equals(MIME_TYPE_MAP.getValue("mp3"), ignoreCase = true) == true
+
     fun getMimeType(extension: String): String {
         return MIME_TYPE_MAP[extension.lowercase()] ?: "audio/mpeg"
     }

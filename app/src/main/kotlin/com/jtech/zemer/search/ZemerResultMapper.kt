@@ -686,9 +686,10 @@ object ZemerResultMapper {
     // Verbatim match of the old YouTube summary section titles/order (the since-deleted
     // YouTube.searchSummary hardcoded these English literals), so the Zemer summary kept the
     // exact look users knew.
-    private const val TITLE_ALBUMS = "Albums"
-    private const val TITLE_SINGLES = "Singles"
-    private const val TITLE_SONGS = "Songs"
+    // Public so features that read an [ArtistPage] (Build My Collection) can tell the shelves apart.
+    const val TITLE_ALBUMS = "Albums"
+    const val TITLE_SINGLES = "Singles"
+    const val TITLE_SONGS = "Songs"
     private const val TITLE_VIDEOS = "Videos"
     private const val TITLE_ARTISTS = "Artists"
     private const val TITLE_PLAYLISTS = "Playlists"

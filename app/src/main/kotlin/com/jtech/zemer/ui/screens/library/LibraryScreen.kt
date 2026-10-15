@@ -4,14 +4,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
 import androidx.navigation.NavController
 import com.jtech.zemer.R
 import com.jtech.zemer.constants.BlockVideosKey
@@ -21,6 +27,7 @@ import com.jtech.zemer.constants.LibraryFilter
 import com.jtech.zemer.ui.component.ChipsRow
 import com.jtech.zemer.ui.component.ChipsRowBottomPadding
 import com.jtech.zemer.ui.component.ChipsRowTopPadding
+import com.jtech.zemer.ui.screens.collection.COLLECTION_BUILDER_ROUTE
 import com.jtech.zemer.utils.rememberEnumPreference
 import com.jtech.zemer.utils.rememberPreference
 
@@ -41,7 +48,10 @@ fun LibraryScreen(navController: NavController) {
     }
 
     val filterContent = @Composable {
-        Row(modifier = Modifier.padding(top = ChipsRowTopPadding, bottom = ChipsRowBottomPadding)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(top = ChipsRowTopPadding, bottom = ChipsRowBottomPadding),
+        ) {
             ChipsRow(
                 chips =
                 availableFilters.associateWith { filter ->
@@ -66,10 +76,18 @@ fun LibraryScreen(navController: NavController) {
                 },
                 modifier = Modifier.weight(1f),
             )
-            OutlinedButton(
-                onClick = { navController.navigate("collection_builder") },
-                modifier = Modifier.padding(end = 8.dp),
+            // Entry to Build My Collection (recommend + bulk-download complete albums as MP3).
+            FilledTonalButton(
+                onClick = { navController.navigate(COLLECTION_BUILDER_ROUTE) },
+                contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
+                modifier = Modifier.padding(end = 12.dp),
             ) {
+                Icon(
+                    painter = painterResource(R.drawable.library_add),
+                    contentDescription = null,
+                    modifier = Modifier.size(ButtonDefaults.IconSize),
+                )
+                Spacer(Modifier.size(ButtonDefaults.IconSpacing))
                 Text(stringResource(R.string.collection_build_title))
             }
         }
@@ -98,6 +116,7 @@ fun LibraryScreen(navController: NavController) {
                     navController,
                     { filterType = LibraryFilter.LIBRARY })
             } else {
+                // Fallback to LIBRARY if videos are blocked
                 LibraryMixScreen(navController, filterContent)
             }
 
@@ -106,6 +125,7 @@ fun LibraryScreen(navController: NavController) {
                     navController,
                     { filterType = LibraryFilter.LIBRARY })
             } else {
+                // Fallback to LIBRARY if podcasts are blocked
                 LibraryMixScreen(navController, filterContent)
             }
         }

@@ -19,7 +19,9 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.jtech.zemer"
+        // Personal "Build My Collection" fork: a separate application id so it installs NEXT TO the
+        // official Zemer app (own data, own downloads) and never replaces or updates it.
+        applicationId = "com.jtech.zemer.collection"
         minSdk = 26
         targetSdk = 36
         versionCode = 38
@@ -65,6 +67,15 @@ android {
     }
 
     signingConfigs {
+        // One fixed key for this personal fork (both build types), so every new APK installs as an
+        // update over the previous one. It signs only this side-loaded build, never official Zemer.
+        create("collection") {
+            storeFile = file("collection.keystore")
+            storePassword = "zemer-collection"
+            keyAlias = "collection"
+            keyPassword = "zemer-collection"
+            storeType = "PKCS12"
+        }
         create("persistentDebug") {
             storeFile = file("persistent-debug.keystore")
             storePassword = "android"
@@ -92,22 +103,21 @@ android {
             isShrinkResources = true
             isCrunchPngs = false
             isDebuggable = false
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("collection")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
             configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
-                nativeSymbolUploadEnabled = true
+                // The fork builds with a placeholder Firebase config, so there is no Crashlytics
+                // project to upload R8 mappings / native symbols to.
+                mappingFileUploadEnabled = false
+                nativeSymbolUploadEnabled = false
             }
         }
         debug {
             isDebuggable = true
-            signingConfig = if (System.getenv("GITHUB_EVENT_NAME") == "pull_request") {
-                signingConfigs.getByName("debug")
-            } else {
-                signingConfigs.getByName("persistentDebug")
-            }
+            signingConfig = signingConfigs.getByName("collection")
         }
     }
 
@@ -190,8 +200,6 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 dependencies {
     implementation("com.zemer:cipher")
-    // Build My Collection exports normal MP3 files after Zemer's standard filtered download finishes.
-    implementation("net.qiujuer.lame:lame:1.0.0")
 
     implementation(libs.guava)
     implementation(libs.concurrent.futures)
@@ -248,6 +256,7 @@ dependencies {
     ksp(libs.hilt.compiler)
 
     implementation(project(":innertube"))
+    implementation(project(":mp3lame"))
 
     // Cover-art and metadata embedding is pure Kotlin (utils/mp4 + utils/ogg) - no native/external deps
 

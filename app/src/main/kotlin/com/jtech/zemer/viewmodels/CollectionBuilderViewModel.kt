@@ -1,357 +1,318 @@
 package com.jtech.zemer.viewmodels
 
 import android.content.Context
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.jtech.zemer.R
 import com.jtech.zemer.db.MusicDatabase
-import com.jtech.zemer.db.entities.Song
-import com.jtech.zemer.recommendation.AlbumRecommendationCandidate
-import com.jtech.zemer.recommendation.CollectionRecommendationRanker
-import com.jtech.zemer.recommendation.CollectionSeed
+import com.jtech.zemer.playback.DownloadUtil
+import com.jtech.zemer.playback.DownloadedMp3Converter
+import com.jtech.zemer.recommendation.AlbumRecommendation
+import com.jtech.zemer.recommendation.CollectionCandidateGatherer
+import com.jtech.zemer.recommendation.CollectionDownloadPlanner
+import com.jtech.zemer.recommendation.CollectionPickerSource
+import com.jtech.zemer.recommendation.CollectionPreferences
+import com.jtech.zemer.recommendation.CollectionSeeds
+import com.jtech.zemer.recommendation.GatherStage
+import com.jtech.zemer.recommendation.PickKind
+import com.jtech.zemer.recommendation.PickOption
+import com.jtech.zemer.recommendation.ZemerCollectionCatalog
 import com.jtech.zemer.search.ZemerSearchRepository
 import com.jtech.zemer.search.zemerSearchOptions
-import com.metrolist.innertube.YouTube.SearchFilter
-import com.metrolist.innertube.models.AlbumItem
-import com.metrolist.innertube.models.ArtistItem
-import com.metrolist.innertube.models.SongItem
-import com.metrolist.innertube.models.YTItem
+import com.jtech.zemer.utils.MediaStoreHelper
+import com.jtech.zemer.utils.reportException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.time.Year
 import javax.inject.Inject
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import timber.log.Timber
 
+enum class CollectionStep(val pickKind: PickKind?) {
+    ARTISTS(PickKind.ARTIST),
+    ALBUMS(PickKind.ALBUM),
+    SONGS(PickKind.SONG),
+    REVIEW(null),
+}
 
-enum class CollectionPickKind { ARTIST, ALBUM, SONG }
-
-data class CollectionRecommendationUi(
-    val album: AlbumItem,
-    val score: Int,
-    val reasons: List<String>,
+data class CollectionDownloadSummary(
+    val albums: Int,
+    val failedAlbums: Int,
+    val queuedSongs: Int,
+    val convertedSongs: Int,
+    val alreadyMp3: Int,
 )
 
 data class CollectionBuilderUiState(
-    val searchQuery: String = "",
-    val pickKind: CollectionPickKind = CollectionPickKind.ARTIST,
-    val searchResults: List<YTItem> = emptyList(),
-    val selectedArtists: List<ArtistItem> = emptyList(),
-    val selectedAlbums: List<AlbumItem> = emptyList(),
-    val selectedSongs: List<SongItem> = emptyList(),
-    val preferClassics: Boolean = true,
-    val preferCollections: Boolean = true,
-    val recommendations: List<CollectionRecommendationUi> = emptyList(),
-    val isSearching: Boolean = false,
-    val isGenerating: Boolean = false,
-    val isPreparingDownloads: Boolean = false,
-    val error: String? = null,
+    val step: CollectionStep = CollectionStep.ARTISTS,
+    val query: String = "",
+    val options: List<PickOption> = emptyList(),
+    val optionsAreSuggestions: Boolean = true,
+    val isLoadingOptions: Boolean = false,
+    val pickedArtists: List<PickOption.Artist> = emptyList(),
+    val pickedAlbums: List<PickOption.Album> = emptyList(),
+    val pickedSongs: List<PickOption.Song> = emptyList(),
+    val preferences: CollectionPreferences = CollectionPreferences(),
+    val gatherStage: GatherStage? = null,
+    val recommendations: List<AlbumRecommendation> = emptyList(),
+    val checkedAlbumIds: Set<String> = emptySet(),
+    val downloadProgress: Pair<Int, Int>? = null,
+    val downloadSummary: CollectionDownloadSummary? = null,
+    @StringRes val message: Int? = null,
 ) {
-    val selectionCount: Int
-        get() = selectedArtists.size + selectedAlbums.size + selectedSongs.size
+    val isGenerating: Boolean get() = gatherStage != null
+    val isDownloading: Boolean get() = downloadProgress != null
+    val pickCount: Int get() = pickedArtists.size + pickedAlbums.size + pickedSongs.size
+
+    fun isPicked(option: PickOption): Boolean = when (option) {
+        is PickOption.Artist -> pickedArtists.any { it.id == option.id }
+        is PickOption.Album -> pickedAlbums.any { it.id == option.id }
+        is PickOption.Song -> pickedSongs.any { it.id == option.id }
+    }
+
+    fun pickedFor(step: CollectionStep): List<PickOption> = when (step) {
+        CollectionStep.ARTISTS -> pickedArtists
+        CollectionStep.ALBUMS -> pickedAlbums
+        CollectionStep.SONGS -> pickedSongs
+        CollectionStep.REVIEW -> emptyList()
+    }
 }
 
+/**
+ * Build My Collection: pick singers → albums → songs, get 60-100 recommended complete albums, review,
+ * and download the checked ones as MP3. Recommendation runs entirely on-device over Zemer's catalog.
+ */
 @HiltViewModel
 class CollectionBuilderViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val database: MusicDatabase,
-    private val zemerRepository: ZemerSearchRepository,
+    private val repository: ZemerSearchRepository,
+    private val downloadUtil: DownloadUtil,
+    private val converter: DownloadedMp3Converter,
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(CollectionBuilderUiState())
-    val uiState: StateFlow<CollectionBuilderUiState> = _uiState.asStateFlow()
 
-    fun setQuery(value: String) {
-        _uiState.value = _uiState.value.copy(searchQuery = value)
+    private val _state = MutableStateFlow(CollectionBuilderUiState())
+    val state: StateFlow<CollectionBuilderUiState> = _state.asStateFlow()
+
+    private val pickerSource = CollectionPickerSource(repository, database)
+    private var catalog: ZemerCollectionCatalog? = null
+    private var optionsJob: Job? = null
+    private var generateJob: Job? = null
+
+    init {
+        loadOptions()
     }
 
-    fun setPickKind(kind: CollectionPickKind) {
-        _uiState.value = _uiState.value.copy(pickKind = kind, searchResults = emptyList(), error = null)
+    // ---- Picker steps -----------------------------------------------------------------------------
+
+    fun onQueryChange(query: String) {
+        _state.update { it.copy(query = query) }
+        loadOptions(debounceMs = SEARCH_DEBOUNCE_MS)
     }
 
-    fun setPreferClassics(value: Boolean) {
-        _uiState.value = _uiState.value.copy(preferClassics = value, recommendations = emptyList())
+    fun togglePick(option: PickOption) {
+        _state.update { s ->
+            when (option) {
+                is PickOption.Artist -> s.copy(pickedArtists = s.pickedArtists.toggled(option))
+                is PickOption.Album -> s.copy(pickedAlbums = s.pickedAlbums.toggled(option))
+                is PickOption.Song -> s.copy(pickedSongs = s.pickedSongs.toggled(option))
+            }.copy(recommendations = emptyList(), checkedAlbumIds = emptySet(), downloadSummary = null)
+        }
     }
 
-    fun setPreferCollections(value: Boolean) {
-        _uiState.value = _uiState.value.copy(preferCollections = value, recommendations = emptyList())
+    fun goTo(step: CollectionStep) {
+        if (step == _state.value.step) return
+        _state.update { it.copy(step = step, query = "", options = emptyList(), message = null) }
+        if (step == CollectionStep.REVIEW) {
+            if (_state.value.recommendations.isEmpty()) generate()
+        } else {
+            loadOptions()
+        }
     }
 
-    fun clearRecommendations() {
-        _uiState.value = _uiState.value.copy(recommendations = emptyList(), error = null)
-    }
-
-    fun search() {
-        val state = _uiState.value
-        val query = state.searchQuery.trim()
-        if (query.isBlank()) {
-            _uiState.value = state.copy(error = "Type a singer, album, or song name first.")
+    fun next() {
+        val s = _state.value
+        val nextStep = CollectionStep.entries.getOrNull(s.step.ordinal + 1) ?: return
+        if (nextStep == CollectionStep.REVIEW && s.pickCount == 0) {
+            _state.update { it.copy(message = R.string.collection_pick_something_first) }
             return
         }
+        goTo(nextStep)
+    }
 
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isSearching = true, error = null)
-            val filter = when (_uiState.value.pickKind) {
-                CollectionPickKind.ARTIST -> SearchFilter.FILTER_ARTIST
-                CollectionPickKind.ALBUM -> SearchFilter.FILTER_ALBUM
-                CollectionPickKind.SONG -> SearchFilter.FILTER_SONG
-            }
-            val result = runCatching {
-                withContext(Dispatchers.IO) {
-                    zemerRepository.filtered(query, filter, zemerSearchOptions(context)).items
-                        .filter { item ->
-                            when (_uiState.value.pickKind) {
-                                CollectionPickKind.ARTIST -> item is ArtistItem
-                                CollectionPickKind.ALBUM -> item is AlbumItem
-                                CollectionPickKind.SONG -> item is SongItem && !item.isVideo && !item.isEpisode
-                            }
-                        }
-                        .take(30)
+    /** Back inside the flow; false when already on the first step (the screen then pops). */
+    fun back(): Boolean {
+        val previous = CollectionStep.entries.getOrNull(_state.value.step.ordinal - 1) ?: return false
+        if (_state.value.isGenerating) generateJob?.cancel()
+        goTo(previous)
+        return true
+    }
+
+    private fun loadOptions(debounceMs: Long = 0) {
+        val kind = _state.value.step.pickKind ?: return
+        optionsJob?.cancel()
+        optionsJob = viewModelScope.launch {
+            if (debounceMs > 0) delay(debounceMs)
+            val s = _state.value
+            val query = s.query.trim()
+            _state.update { it.copy(isLoadingOptions = true, message = null) }
+            try {
+                val options = zemerSearchOptions(context)
+                val result = if (query.isEmpty()) {
+                    pickerSource.suggestions(kind, s.pickedArtists.map { it.seed }, s.pickedAlbums.map { it.seed }, options)
+                } else {
+                    pickerSource.search(kind, query, options)
                 }
-            }
-            result.onSuccess { found ->
-                _uiState.value = _uiState.value.copy(
-                    isSearching = false,
-                    searchResults = found,
-                    error = if (found.isEmpty()) "No matching results found." else null,
-                )
-            }.onFailure { error ->
-                _uiState.value = _uiState.value.copy(
-                    isSearching = false,
-                    error = error.message ?: "Search failed. Please try again.",
-                )
+                _state.update {
+                    it.copy(
+                        options = result,
+                        optionsAreSuggestions = query.isEmpty(),
+                        isLoadingOptions = false,
+                        message = if (result.isEmpty() && query.isNotEmpty()) R.string.collection_no_results else null,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "Collection picker load failed")
+                _state.update { it.copy(isLoadingOptions = false, message = R.string.collection_load_failed) }
             }
         }
     }
 
-    fun toggleSelection(item: YTItem) {
-        val state = _uiState.value
-        _uiState.value = when (item) {
-            is ArtistItem -> state.copy(
-                selectedArtists = state.selectedArtists.toggleById(item),
-                recommendations = emptyList(),
-            )
-            is AlbumItem -> state.copy(
-                selectedAlbums = state.selectedAlbums.toggleById(item),
-                recommendations = emptyList(),
-            )
-            is SongItem -> state.copy(
-                selectedSongs = state.selectedSongs.toggleById(item),
-                recommendations = emptyList(),
-            )
-            else -> state
-        }
+    // ---- Recommendations --------------------------------------------------------------------------
+
+    fun setPreferClassics(value: Boolean) = updatePreferences { it.copy(preferClassics = value) }
+
+    fun setPreferCollections(value: Boolean) = updatePreferences { it.copy(preferCollections = value) }
+
+    fun setTargetCount(value: Int) = updatePreferences { it.copy(targetCount = value) }
+
+    private fun updatePreferences(change: (CollectionPreferences) -> CollectionPreferences) {
+        _state.update { it.copy(preferences = change(it.preferences)) }
     }
 
-    fun generateRecommendations() {
-        val initial = _uiState.value
-        if (initial.selectionCount == 0) {
-            _uiState.value = initial.copy(error = "Choose at least one favorite first.")
+    fun generate() {
+        val s = _state.value
+        if (s.pickCount == 0) {
+            _state.update { it.copy(message = R.string.collection_pick_something_first) }
             return
         }
+        generateJob?.cancel()
+        generateJob = viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    gatherStage = GatherStage.YOUR_ARTISTS,
+                    recommendations = emptyList(),
+                    checkedAlbumIds = emptySet(),
+                    downloadSummary = null,
+                    message = null,
+                )
+            }
+            try {
+                val zemerCatalog = ZemerCollectionCatalog(
+                    repository = repository,
+                    database = database,
+                    mediaStoreHelper = MediaStoreHelper(context),
+                    options = zemerSearchOptions(context),
+                )
+                catalog = zemerCatalog
+                val seeds = CollectionSeeds(
+                    artists = s.pickedArtists.map { it.seed },
+                    albums = s.pickedAlbums.map { it.seed },
+                    songs = s.pickedSongs.map { it.seed },
+                )
+                val result = CollectionCandidateGatherer(zemerCatalog).recommend(
+                    seeds = seeds,
+                    preferences = s.preferences,
+                    currentYear = Year.now().value,
+                    onStage = { stage -> _state.update { it.copy(gatherStage = stage) } },
+                )
+                _state.update {
+                    it.copy(
+                        gatherStage = null,
+                        recommendations = result,
+                        checkedAlbumIds = result.mapTo(LinkedHashSet()) { r -> r.album.id },
+                        message = if (result.isEmpty()) R.string.collection_no_recommendations else null,
+                    )
+                }
+            } catch (e: CancellationException) {
+                _state.update { it.copy(gatherStage = null) }
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "Collection recommendations failed")
+                reportException(e, "CollectionBuilder.generate")
+                _state.update { it.copy(gatherStage = null, message = R.string.collection_load_failed) }
+            }
+        }
+    }
 
+    fun toggleAlbum(albumId: String) {
+        _state.update { s ->
+            val checked = s.checkedAlbumIds.toMutableSet()
+            if (!checked.add(albumId)) checked.remove(albumId)
+            s.copy(checkedAlbumIds = checked)
+        }
+    }
+
+    fun setAllChecked(checked: Boolean) {
+        _state.update { s ->
+            s.copy(checkedAlbumIds = if (checked) s.recommendations.mapTo(LinkedHashSet()) { it.album.id } else emptySet())
+        }
+    }
+
+    // ---- Download ---------------------------------------------------------------------------------
+
+    fun downloadSelected() {
+        val s = _state.value
+        val zemerCatalog = catalog ?: return
+        val albums = s.recommendations.filter { it.album.id in s.checkedAlbumIds }.map { it.album }
+        if (albums.isEmpty() || s.isDownloading) return
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isGenerating = true, error = null)
-            val result = runCatching {
-                withContext(Dispatchers.IO) { buildRecommendations(_uiState.value) }
-            }
-            result.onSuccess { recommendations ->
-                _uiState.value = _uiState.value.copy(
-                    isGenerating = false,
-                    recommendations = recommendations,
-                    error = if (recommendations.isEmpty()) {
-                        "No album recommendations were found for these picks."
-                    } else null,
-                )
-            }.onFailure { error ->
-                _uiState.value = _uiState.value.copy(
-                    isGenerating = false,
-                    error = error.message ?: "Could not build recommendations.",
-                )
-            }
-        }
-    }
-
-    private suspend fun buildRecommendations(state: CollectionBuilderUiState): List<CollectionRecommendationUi> {
-        val options = zemerSearchOptions(context)
-        val selectedArtistIds = buildSet {
-            addAll(state.selectedArtists.map { it.id })
-            state.selectedAlbums.forEach { album -> album.artists.orEmpty().mapNotNullTo(this) { it.id } }
-            state.selectedSongs.forEach { song -> song.artists.mapNotNullTo(this) { it.id } }
-        }
-        val seedAlbumIds = state.selectedAlbums.map { it.id }.toSet()
-        val seedSongIds = state.selectedSongs.map { it.id }.toSet()
-        val selectedAlbumArtistIds = state.selectedAlbums.associate { album ->
-            album.id to album.artists.orEmpty().mapNotNull { it.id }.toSet()
-        }
-        val selectedSongArtistIds = state.selectedSongs.associate { song ->
-            song.id to song.artists.mapNotNull { it.id }.toSet()
-        }
-
-        val candidateAlbums = linkedMapOf<String, AlbumItem>()
-        val popularityRank = mutableMapOf<String, Int>()
-        val radioAlbumRelations = mutableMapOf<String, MutableSet<String>>()
-        val radioSongRelations = mutableMapOf<String, MutableSet<String>>()
-
-        runCatching { zemerRepository.homeRows(options) }.getOrNull()?.albums.orEmpty()
-            .forEachIndexed { index, album ->
-                candidateAlbums.putIfAbsent(album.id, album)
-                popularityRank[album.id] = index + 1
-            }
-
-        selectedArtistIds.take(12).forEach { artistId ->
-            runCatching { zemerRepository.artist(artistId, options) }.getOrNull()
-                ?.sections
-                .orEmpty()
-                .flatMap { it.items }
-                .filterIsInstance<AlbumItem>()
-                .forEach { candidateAlbums.putIfAbsent(it.id, it) }
-        }
-
-        // Radio is Zemer's existing related-content signal. Turn the albums referenced by related
-        // songs into full album candidates so song/album seeds influence more than raw popularity.
-        state.selectedSongs.take(8).forEach { seedSong ->
-            val related = runCatching { zemerRepository.radio("song", seedSong.id, options) }
-                .getOrNull()?.songs.orEmpty()
-            addAlbumsFromRelatedSongs(
-                relatedSongs = related,
-                seedId = seedSong.id,
-                relationMap = radioSongRelations,
-                candidateAlbums = candidateAlbums,
-                options = options,
-            )
-        }
-        state.selectedAlbums.take(8).forEach { seedAlbum ->
-            val related = runCatching { zemerRepository.radio("album", seedAlbum.id, options) }
-                .getOrNull()?.songs.orEmpty()
-            addAlbumsFromRelatedSongs(
-                relatedSongs = related,
-                seedId = seedAlbum.id,
-                relationMap = radioAlbumRelations,
-                candidateAlbums = candidateAlbums,
-                options = options,
-            )
-        }
-
-        val seed = CollectionSeed(
-            artistIds = selectedArtistIds,
-            albumIds = seedAlbumIds,
-            songIds = seedSongIds,
-        )
-
-        val candidateModels = candidateAlbums.values.map { album ->
-            val artistIds = album.artists.orEmpty().mapNotNull { it.id }.toSet()
-            val artistRelatedAlbums = selectedAlbumArtistIds
-                .filterValues { ids -> ids.isNotEmpty() && artistIds.intersect(ids).isNotEmpty() }
-                .keys
-            val artistRelatedSongs = selectedSongArtistIds
-                .filterValues { ids -> ids.isNotEmpty() && artistIds.intersect(ids).isNotEmpty() }
-                .keys
-            AlbumRecommendationCandidate(
-                albumId = album.id,
-                artistIds = artistIds,
-                relatedToAlbumIds = artistRelatedAlbums + radioAlbumRelations[album.id].orEmpty(),
-                relatedToSongIds = artistRelatedSongs + radioSongRelations[album.id].orEmpty(),
-                popularityRank = popularityRank[album.id],
-                releaseYear = album.year.takeIf { state.preferClassics },
-                isCompilation = state.preferCollections && album.looksLikeCollection(),
-            )
-        }
-
-        return CollectionRecommendationRanker.rank(seed, candidateModels, limit = 100)
-            .mapNotNull { ranked ->
-                candidateAlbums[ranked.candidate.albumId]?.let { album ->
-                    CollectionRecommendationUi(album, ranked.score, ranked.reasons)
+            _state.update { it.copy(downloadProgress = 0 to albums.size, downloadSummary = null, message = null) }
+            try {
+                val planner = CollectionDownloadPlanner(database, zemerCatalog, downloadUtil, converter)
+                val result = planner.downloadAll(albums) { done, total ->
+                    _state.update { it.copy(downloadProgress = done to total) }
                 }
-            }
-    }
-
-    private suspend fun addAlbumsFromRelatedSongs(
-        relatedSongs: List<SongItem>,
-        seedId: String,
-        relationMap: MutableMap<String, MutableSet<String>>,
-        candidateAlbums: MutableMap<String, AlbumItem>,
-        options: com.jtech.zemer.search.ZemerSearchOptions,
-    ) {
-        relatedSongs.mapNotNull { it.album?.id }
-            .distinct()
-            .take(16)
-            .forEach { albumId ->
-                relationMap.getOrPut(albumId) { mutableSetOf() }.add(seedId)
-                if (albumId !in candidateAlbums) {
-                    runCatching { zemerRepository.album(albumId, null, options) }
-                        .getOrNull()
-                        ?.album
-                        ?.let { candidateAlbums[albumId] = it }
+                _state.update {
+                    it.copy(
+                        downloadProgress = null,
+                        downloadSummary = CollectionDownloadSummary(
+                            albums = result.albums,
+                            failedAlbums = result.failedAlbums,
+                            queuedSongs = result.queuedSongs,
+                            convertedSongs = result.convertedSongs,
+                            alreadyMp3 = result.alreadyMp3,
+                        ),
+                    )
                 }
-            }
-    }
-
-    fun prepareSongsForDownload(
-        albumIds: Set<String>,
-        onReady: (List<Song>) -> Unit,
-    ) {
-        if (albumIds.isEmpty()) return
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isPreparingDownloads = true, error = null)
-            val result = runCatching {
-                withContext(Dispatchers.IO) {
-                    val options = zemerSearchOptions(context)
-                    val albumsById = _uiState.value.recommendations.associateBy { it.album.id }
-                    albumIds.flatMap { albumId ->
-                        var songs = database.albumWithSongs(albumId).first()?.songs.orEmpty()
-                        if (songs.isEmpty()) {
-                            val album = albumsById[albumId]?.album
-                            if (album != null) {
-                                zemerRepository.album(album.id, album.playlistId, options)?.let { page ->
-                                    database.transaction { insert(page) }
-                                }
-                                // MusicDatabase.transaction dispatches to Room's transaction executor.
-                                // Wait briefly for that insert rather than turning a fast first tap into
-                                // an empty bulk-download request.
-                                repeat(24) {
-                                    if (songs.isNotEmpty()) return@repeat
-                                    delay(75)
-                                    songs = database.albumWithSongs(albumId).first()?.songs.orEmpty()
-                                }
-                            }
-                        }
-                        songs
-                    }.distinctBy { it.id }
-                }
-            }
-            result.onSuccess { songs ->
-                _uiState.value = _uiState.value.copy(
-                    isPreparingDownloads = false,
-                    error = if (songs.isEmpty()) "No downloadable songs were found." else null,
-                )
-                onReady(songs)
-            }.onFailure { error ->
-                _uiState.value = _uiState.value.copy(
-                    isPreparingDownloads = false,
-                    error = error.message ?: "Could not prepare the selected albums for download.",
-                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "Collection download planning failed")
+                reportException(e, "CollectionBuilder.download")
+                _state.update { it.copy(downloadProgress = null, message = R.string.collection_download_failed) }
             }
         }
     }
-}
 
-private fun <T : YTItem> List<T>.toggleById(item: T): List<T> =
-    if (any { it.id == item.id }) filterNot { it.id == item.id } else this + item
+    fun dismissMessage() {
+        _state.update { it.copy(message = null) }
+    }
 
-private fun AlbumItem.looksLikeCollection(): Boolean {
-    val normalized = title.lowercase()
-    return listOf(
-        "collection",
-        "best of",
-        "greatest",
-        "hits",
-        "anthology",
-        "vol.",
-        "volume",
-        "those were the days",
-    ).any(normalized::contains)
+    private fun <T : PickOption> List<T>.toggled(option: T): List<T> =
+        if (any { it.id == option.id }) filterNot { it.id == option.id } else this + option
+
+    private companion object {
+        const val SEARCH_DEBOUNCE_MS = 350L
+    }
 }

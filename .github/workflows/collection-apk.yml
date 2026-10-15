@@ -1,0 +1,100 @@
+name: Build My Collection APK
+
+# Builds the personal "Zemer Collection" APK from feature/my-collection and publishes it as the
+# `collection-latest` GitHub release, so it can be downloaded straight to the phone.
+on:
+  push:
+    branches:
+      - feature/my-collection
+  workflow_dispatch:
+
+concurrency:
+  group: collection-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Configure Android SDK path
+        run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+
+      # The fork has no Firebase project; a placeholder config lets the google-services plugin run.
+      # Crashlytics/Firestore simply stay inactive (content still comes from the Zemer content mirror).
+      - name: Placeholder Firebase config
+        run: |
+          cat > app/google-services.json <<'EOF'
+          {
+            "project_info": {
+              "project_number": "123456789000",
+              "project_id": "zemer-collection-local",
+              "storage_bucket": "zemer-collection-local.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:123456789000:android:0000000000000000",
+                  "android_client_info": { "package_name": "com.jtech.zemer.collection" }
+                },
+                "oauth_client": [
+                  { "client_id": "123456789000-placeholder.apps.googleusercontent.com", "client_type": 3 }
+                ],
+                "api_key": [ { "current_key": "AIzaSyPLACEHOLDERPLACEHOLDERPLACEHOLDER00" } ]
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
+
+      - name: Unit tests (MP3 encoder, MP3 export, recommender)
+        run: >
+          ./gradlew :mp3lame:test :app:testDebugUnitTest
+          --tests 'com.jtech.zemer.recommendation.*'
+          --tests 'com.jtech.zemer.utils.mp3.*'
+
+      - name: Build release APK (R8)
+        run: ./gradlew :app:assembleRelease
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/Zemer-Collection.apk
+          ls -la dist
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zemer-collection-apk
+          path: dist/Zemer-Collection.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish to the collection-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete collection-latest --yes --cleanup-tag || true
+          gh release create collection-latest dist/Zemer-Collection.apk \
+            --target "${GITHUB_SHA}" \
+            --title "Zemer Collection (latest build)" \
+            --notes "Personal build with Build My Collection. Built from ${GITHUB_SHA::7}." \
+            --prerelease
