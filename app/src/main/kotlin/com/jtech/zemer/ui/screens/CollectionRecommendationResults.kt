@@ -21,8 +21,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.jtech.zemer.R
 import com.jtech.zemer.recommendation.RankedAlbumRecommendation
 
 /** Review step shown after ranking. Album metadata/art is supplied by the catalog adapter. */
@@ -58,11 +60,11 @@ fun CollectionRecommendationResults(
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = "Recommended full albums",
+            text = stringResource(R.string.collection_recommended_albums),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
         )
-        Text("${selected.size} of ${albums.size} selected")
+        Text(stringResource(R.string.collection_selected_of, selected.size, albums.size))
 
         LazyColumn(
             modifier = Modifier.weight(1f),
@@ -94,7 +96,7 @@ fun CollectionRecommendationResults(
                                 )
                             }
                         }
-                        Text("${album.score} pts")
+                        Text(stringResource(R.string.collection_score_points, album.score))
                     }
                 }
             }
@@ -105,7 +107,7 @@ fun CollectionRecommendationResults(
             enabled = selected.isNotEmpty(),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Download ${selected.size} Selected Albums")
+            Text(stringResource(R.string.collection_download_selected, selected.size))
         }
     }
 }
