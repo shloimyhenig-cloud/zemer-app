@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -34,6 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.jtech.zemer.LocalDatabase
 import com.jtech.zemer.LocalDownloadUtil
+import com.jtech.zemer.R
 import com.jtech.zemer.playback.Mp3CollectionDownloadCoordinator
 import com.jtech.zemer.search.zemerAlbumRoute
 import com.jtech.zemer.viewmodels.CollectionBuilderViewModel
@@ -55,7 +57,7 @@ fun CollectionBuilderScreen(
     val downloadUtil = LocalDownloadUtil.current
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Build My Collection") }) },
+        topBar = { TopAppBar(title = { Text(stringResource(R.string.collection_build_title)) }) },
     ) { padding ->
         if (state.recommendations.isNotEmpty()) {
             Column(
@@ -66,10 +68,10 @@ fun CollectionBuilderScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 OutlinedButton(onClick = viewModel::clearRecommendations) {
-                    Text("Change my favorites")
+                    Text(stringResource(R.string.collection_change_favorites))
                 }
                 Text(
-                    "Selected albums are saved as real .mp3 files in your normal Zemer music folders.",
+                    stringResource(R.string.collection_mp3_note),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (state.isPreparingDownloads) {
@@ -78,18 +80,19 @@ fun CollectionBuilderScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         CircularProgressIndicator()
-                        Text("Preparing full albums…")
+                        Text(stringResource(R.string.collection_preparing_albums))
                     }
                 }
                 state.error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error)
                 }
+                val albumFallback = stringResource(R.string.collection_album_label)
                 val albumResults = state.recommendations.map { recommendation ->
                     CollectionAlbumResult(
                         albumId = recommendation.album.id,
                         title = recommendation.album.title,
                         artist = recommendation.album.artists.orEmpty().joinToString { it.name }
-                            .ifBlank { "Album" },
+                            .ifBlank { albumFallback },
                         score = recommendation.score,
                         reasons = recommendation.reasons,
                     )
@@ -125,7 +128,7 @@ fun CollectionBuilderScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    "Pick a few favorites. Zemer will use its real catalog, related-song radio, artist albums and popular albums to recommend complete CDs.",
+                    stringResource(R.string.collection_intro),
                     style = MaterialTheme.typography.bodyLarge,
                 )
 
@@ -134,15 +137,7 @@ fun CollectionBuilderScreen(
                         FilterChip(
                             selected = state.pickKind == kind,
                             onClick = { viewModel.setPickKind(kind) },
-                            label = {
-                                Text(
-                                    when (kind) {
-                                        CollectionPickKind.ARTIST -> "Artists"
-                                        CollectionPickKind.ALBUM -> "Albums"
-                                        CollectionPickKind.SONG -> "Songs"
-                                    }
-                                )
-                            },
+                            label = { Text(kind.label()) },
                         )
                     }
                 }
@@ -150,7 +145,7 @@ fun CollectionBuilderScreen(
                 OutlinedTextField(
                     value = state.searchQuery,
                     onValueChange = viewModel::setQuery,
-                    label = { Text("Search Zemer") },
+                    label = { Text(stringResource(R.string.collection_search_zemer)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -162,12 +157,17 @@ fun CollectionBuilderScreen(
                     if (state.isSearching) {
                         CircularProgressIndicator()
                     } else {
-                        Text("Search ${state.pickKind.label()}")
+                        Text(stringResource(R.string.collection_search_kind, state.pickKind.label().lowercase()))
                     }
                 }
 
                 Text(
-                    "Selected: ${state.selectedArtists.size} artists • ${state.selectedAlbums.size} albums • ${state.selectedSongs.size} songs",
+                    stringResource(
+                        R.string.collection_selected_counts,
+                        state.selectedArtists.size,
+                        state.selectedAlbums.size,
+                        state.selectedSongs.size,
+                    ),
                     fontWeight = FontWeight.Bold,
                 )
 
@@ -179,7 +179,7 @@ fun CollectionBuilderScreen(
                         checked = state.preferClassics,
                         onCheckedChange = viewModel::setPreferClassics,
                     )
-                    Text("Favor classic / established albums")
+                    Text(stringResource(R.string.collection_favor_classics))
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -189,14 +189,14 @@ fun CollectionBuilderScreen(
                         checked = state.preferCollections,
                         onCheckedChange = viewModel::setPreferCollections,
                     )
-                    Text("Favor collections / best-of albums")
+                    Text(stringResource(R.string.collection_favor_collections))
                 }
 
                 state.error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error)
                 }
 
-                Text("Search results", fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.collection_search_results), fontWeight = FontWeight.Bold)
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -223,7 +223,7 @@ fun CollectionBuilderScreen(
                     if (state.isGenerating) {
                         CircularProgressIndicator()
                     } else {
-                        Text("Generate Full-Album Recommendations")
+                        Text(stringResource(R.string.collection_generate_recommendations))
                     }
                 }
             }
@@ -253,7 +253,7 @@ private fun CollectionPickRow(
                     is AlbumItem -> item.artists.orEmpty().joinToString { it.name } +
                         (item.year?.let { " • $it" } ?: "")
                     is SongItem -> item.artists.joinToString { it.name }
-                    is ArtistItem -> "Artist"
+                    is ArtistItem -> stringResource(R.string.collection_artist_label)
                     else -> ""
                 }
                 if (subtitle.isNotBlank()) {
@@ -264,8 +264,11 @@ private fun CollectionPickRow(
     }
 }
 
-private fun CollectionPickKind.label(): String = when (this) {
-    CollectionPickKind.ARTIST -> "artists"
-    CollectionPickKind.ALBUM -> "albums"
-    CollectionPickKind.SONG -> "songs"
-}
+@Composable
+private fun CollectionPickKind.label(): String = stringResource(
+    when (this) {
+        CollectionPickKind.ARTIST -> R.string.artists
+        CollectionPickKind.ALBUM -> R.string.albums
+        CollectionPickKind.SONG -> R.string.songs
+    }
+)
