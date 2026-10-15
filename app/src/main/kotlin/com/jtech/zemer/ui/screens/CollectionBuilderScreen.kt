@@ -26,12 +26,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
+import com.jtech.zemer.LocalDatabase
 import com.jtech.zemer.LocalDownloadUtil
+import com.jtech.zemer.playback.Mp3CollectionDownloadCoordinator
 import com.jtech.zemer.search.zemerAlbumRoute
 import com.jtech.zemer.viewmodels.CollectionBuilderViewModel
 import com.jtech.zemer.viewmodels.CollectionPickKind
@@ -47,6 +50,8 @@ fun CollectionBuilderScreen(
     viewModel: CollectionBuilderViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val database = LocalDatabase.current
     val downloadUtil = LocalDownloadUtil.current
 
     Scaffold(
@@ -63,6 +68,10 @@ fun CollectionBuilderScreen(
                 OutlinedButton(onClick = viewModel::clearRecommendations) {
                     Text("Change my favorites")
                 }
+                Text(
+                    "Selected albums are saved as real .mp3 files in your normal Zemer music folders.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 if (state.isPreparingDownloads) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -94,7 +103,14 @@ fun CollectionBuilderScreen(
                     },
                     onDownloadSelected = { albumIds ->
                         viewModel.prepareSongsForDownload(albumIds) { songs ->
-                            songs.forEach { downloadUtil.downloadToMediaStore(it) }
+                            songs.forEach { song ->
+                                Mp3CollectionDownloadCoordinator.enqueue(
+                                    context = context,
+                                    database = database,
+                                    downloadUtil = downloadUtil,
+                                    song = song,
+                                )
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f),
@@ -109,7 +125,7 @@ fun CollectionBuilderScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    "Pick a few favorites. Zemer will use its real catalog, artist albums and popular albums to recommend complete CDs.",
+                    "Pick a few favorites. Zemer will use its real catalog, related-song radio, artist albums and popular albums to recommend complete CDs.",
                     style = MaterialTheme.typography.bodyLarge,
                 )
 
