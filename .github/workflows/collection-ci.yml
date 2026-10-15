@@ -1,4 +1,4 @@
-name: Collection Builder Compile Check
+name: Collection Builder APK
 
 on:
   push:
@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  compile:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -38,7 +38,7 @@ jobs:
       - name: Configure Android SDK path
         run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
 
-      - name: Configure Firebase for compile check
+      - name: Configure Firebase
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
         run: |
@@ -70,5 +70,25 @@ jobs:
           EOF
           fi
 
-      - name: Compile debug Kotlin
-        run: ./gradlew :app:compileDebugKotlin
+      - name: Generate debug keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore app/persistent-debug.keystore \
+            -storepass android -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Run collection ranker tests
+        run: ./gradlew :app:testDebugUnitTest --tests com.jtech.zemer.recommendation.CollectionRecommendationRankerTest
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: zemer-build-my-collection-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
