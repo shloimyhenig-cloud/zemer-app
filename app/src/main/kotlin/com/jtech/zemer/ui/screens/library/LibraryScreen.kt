@@ -9,6 +9,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
 import androidx.navigation.NavController
 import com.jtech.zemer.R
 import com.jtech.zemer.constants.BlockVideosKey
@@ -63,6 +66,12 @@ fun LibraryScreen(navController: NavController) {
                 },
                 modifier = Modifier.weight(1f),
             )
+            OutlinedButton(
+                onClick = { navController.navigate("collection_builder") },
+                modifier = Modifier.padding(end = 8.dp),
+            ) {
+                Text("Build My Collection")
+            }
         }
     }
 
@@ -89,7 +98,6 @@ fun LibraryScreen(navController: NavController) {
                     navController,
                     { filterType = LibraryFilter.LIBRARY })
             } else {
-                // Fallback to LIBRARY if videos are blocked
                 LibraryMixScreen(navController, filterContent)
             }
 
@@ -98,7 +106,6 @@ fun LibraryScreen(navController: NavController) {
                     navController,
                     { filterType = LibraryFilter.LIBRARY })
             } else {
-                // Fallback to LIBRARY if podcasts are blocked
                 LibraryMixScreen(navController, filterContent)
             }
         }
