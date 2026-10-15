@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="collection_build_title">Build My Collection</string>
+    <string name="collection_change_favorites">Change my favorites</string>
+    <string name="collection_mp3_note">Selected albums are saved as real .mp3 files in your normal Zemer music folders.</string>
+    <string name="collection_preparing_albums">Preparing full albums…</string>
+    <string name="collection_intro">Pick a few favorites. Zemer will use its real catalog, related-song radio, artist albums and popular albums to recommend complete CDs.</string>
+    <string name="collection_search_zemer">Search Zemer</string>
+    <string name="collection_search_kind">Search %1$s</string>
+    <string name="collection_selected_counts">Selected: %1$d artists • %2$d albums • %3$d songs</string>
+    <string name="collection_favor_classics">Favor classic / established albums</string>
+    <string name="collection_favor_collections">Favor collections / best-of albums</string>
+    <string name="collection_search_results">Search results</string>
+    <string name="collection_generate_recommendations">Generate Full-Album Recommendations</string>
+    <string name="collection_artist_label">Artist</string>
+    <string name="collection_album_label">Album</string>
+    <string name="collection_recommended_albums">Recommended full albums</string>
+    <string name="collection_selected_of">%1$d of %2$d selected</string>
+    <string name="collection_score_points">%1$d pts</string>
+    <string name="collection_download_selected">Download %1$d Selected Albums</string>
+</resources>
