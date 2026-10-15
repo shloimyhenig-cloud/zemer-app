@@ -95,57 +95,31 @@ fun NavGraphBuilder.navigationBuilder(
         }
     }
     composable(
-        // kidZone: the KidZone-navigation-context flag (like isPodcastChannel) - a show opened from
-        // the KidZone podcasts grid keeps every server call restricted to kid content (drill-in
-        // discipline; the server 404s non-kid shows under it as the second layer).
         route = "online_podcast/{podcastId}?kidZone={kidZone}",
         arguments = listOf(
-            navArgument("podcastId") {
-                type = NavType.StringType
-            },
-            navArgument("kidZone") {
-                type = NavType.BoolType
-                defaultValue = false
-            },
+            navArgument("podcastId") { type = NavType.StringType },
+            navArgument("kidZone") { type = NavType.BoolType; defaultValue = false },
         ),
     ) {
-        if (!podcastsBlockedRedirect(navController)) {
-            OnlinePodcastScreen(navController, scrollBehavior)
-        }
+        if (!podcastsBlockedRedirect(navController)) OnlinePodcastScreen(navController, scrollBehavior)
     }
     composable(Screens.KidZone.route) {
         KidZoneScreen(navController, searchBarScrollBehavior)
     }
-    composable(
-        Screens.Library.route,
-    ) {
+    composable(Screens.Library.route) {
         LibraryScreen(navController)
     }
-    composable("history") {
-        HistoryScreen(navController)
+    composable("collection_builder") {
+        CollectionBuilderScreen(navController)
     }
-    composable("recognition_history") {
-        RecognitionHistoryScreen(navController)
-    }
-    composable("latest_releases") {
-        LatestReleasesScreen(navController, scrollBehavior)
-    }
-    composable("stats") {
-        StatsScreen(navController, scrollBehavior)
-    }
-    composable("statuses") {
-        StatusesScreen(navController, scrollBehavior)
-    }
-    composable("zemer_playlists") {
-        ZemerPlaylistsScreen(navController, scrollBehavior)
-    }
-    composable("genres") {
-        GenresScreen(navController, scrollBehavior)
-    }
+    composable("history") { HistoryScreen(navController) }
+    composable("recognition_history") { RecognitionHistoryScreen(navController) }
+    composable("latest_releases") { LatestReleasesScreen(navController, scrollBehavior) }
+    composable("stats") { StatsScreen(navController, scrollBehavior) }
+    composable("statuses") { StatusesScreen(navController, scrollBehavior) }
+    composable("zemer_playlists") { ZemerPlaylistsScreen(navController, scrollBehavior) }
+    composable("genres") { GenresScreen(navController, scrollBehavior) }
     composable(
-        // {genreId} is a server genre slug ("nigunim"), never a YouTube id — its own screen, like
-        // zemer_playlist. A blank slug is a broken deep link — pop back; an unknown one 404s and the
-        // screen backs itself out.
         route = "genre/{genreId}",
         arguments = listOf(navArgument("genreId") { type = NavType.StringType }),
     ) {
@@ -154,15 +128,10 @@ fun NavGraphBuilder.navigationBuilder(
         else GenreScreen(navController, scrollBehavior)
     }
     composable(
-        // One genre's full Albums or Singles grid (see-all). {genreId} is the slug; {section} is
-        // albums/singles. A blank slug is a broken deep link — pop back.
         route = "genre_section/{genreId}?section={section}",
         arguments = listOf(
             navArgument("genreId") { type = NavType.StringType },
-            navArgument("section") {
-                type = NavType.StringType
-                defaultValue = ""
-            },
+            navArgument("section") { type = NavType.StringType; defaultValue = "" },
         ),
     ) {
         val genreId = it.arguments?.getString("genreId")
@@ -170,13 +139,9 @@ fun NavGraphBuilder.navigationBuilder(
         else GenreSectionScreen(navController, scrollBehavior)
     }
     composable("podcast_genres") {
-        if (!podcastsBlockedRedirect(navController)) {
-            PodcastGenresScreen(navController, scrollBehavior)
-        }
+        if (!podcastsBlockedRedirect(navController)) PodcastGenresScreen(navController, scrollBehavior)
     }
     composable(
-        // One podcast genre's flat show list. {genreId} is the server slug; blank = broken deep link,
-        // pop back; unknown 404s and the screen backs itself out.
         route = "podcast_genre/{genreId}",
         arguments = listOf(navArgument("genreId") { type = NavType.StringType }),
     ) {
@@ -189,7 +154,6 @@ fun NavGraphBuilder.navigationBuilder(
         route = "home_see_all/{row}",
         arguments = listOf(navArgument("row") { type = NavType.StringType }),
     ) {
-        // An unknown/absent row slug is a broken deep link, not a crash — pop back to Home.
         val row = HomeSeeAllRow.fromSlug(it.arguments?.getString("row"))
         if (row == null) LaunchedEffect(Unit) { navController.navigateUp() }
         else HomeSeeAllScreen(navController, scrollBehavior, row)
@@ -198,298 +162,120 @@ fun NavGraphBuilder.navigationBuilder(
         route = "artist_section/{artistId}?title={title}&isPodcastChannel={isPodcastChannel}&kidZone={kidZone}",
         arguments = listOf(
             navArgument("artistId") { type = NavType.StringType },
-            navArgument("title") {
-                type = NavType.StringType
-                defaultValue = ""
-            },
-            // Carried through so the section's ArtistViewModel loads the podcast-channel endpoint
-            // (/podcast-channel) rather than the music /artist path for a UC... channel id.
-            navArgument("isPodcastChannel") {
-                type = NavType.BoolType
-                defaultValue = false
-            },
-            // KidZone navigation context - the see-all must stay kid-scoped (see the artist route).
-            navArgument("kidZone") {
-                type = NavType.BoolType
-                defaultValue = false
-            },
+            navArgument("title") { type = NavType.StringType; defaultValue = "" },
+            navArgument("isPodcastChannel") { type = NavType.BoolType; defaultValue = false },
+            navArgument("kidZone") { type = NavType.BoolType; defaultValue = false },
         ),
     ) {
-        // A podcast-channel section is podcast content; music artist sections are untouched.
-        if (it.arguments?.getBoolean("isPodcastChannel") == true &&
-            podcastsBlockedRedirect(navController)
-        ) {
-            return@composable
-        }
+        if (it.arguments?.getBoolean("isPodcastChannel") == true && podcastsBlockedRedirect(navController)) return@composable
         ArtistSectionScreen(navController, scrollBehavior, it.arguments?.getString("title").orEmpty())
     }
     composable(
         route = "search/{query}?filter={filter}",
-        arguments =
-        listOf(
-            navArgument("query") {
-                type = NavType.StringType
-            },
-            navArgument("filter") {
-                type = NavType.StringType
-                nullable = true
-                defaultValue = null
-            },
+        arguments = listOf(
+            navArgument("query") { type = NavType.StringType },
+            navArgument("filter") { type = NavType.StringType; nullable = true; defaultValue = null },
         ),
-        enterTransition = {
-            fadeIn(tween(250))
-        },
+        enterTransition = { fadeIn(tween(250)) },
         exitTransition = {
-            if (targetState.destination.route?.startsWith("search/") == true) {
-                fadeOut(tween(200))
-            } else {
-                fadeOut(tween(200)) + slideOutHorizontally { -it / 2 }
-            }
+            if (targetState.destination.route?.startsWith("search/") == true) fadeOut(tween(200))
+            else fadeOut(tween(200)) + slideOutHorizontally { -it / 2 }
         },
         popEnterTransition = {
-            if (initialState.destination.route?.startsWith("search/") == true) {
-                fadeIn(tween(250))
-            } else {
-                fadeIn(tween(250)) + slideInHorizontally { -it / 2 }
-            }
+            if (initialState.destination.route?.startsWith("search/") == true) fadeIn(tween(250))
+            else fadeIn(tween(250)) + slideInHorizontally { -it / 2 }
         },
-        popExitTransition = {
-            fadeOut(tween(200))
-        },
-    ) {
-        OnlineSearchResult(navController)
-    }
+        popExitTransition = { fadeOut(tween(200)) },
+    ) { OnlineSearchResult(navController) }
     composable(
-        // Optional args (their defaults keep every existing `album/{albumId}` link matching): `zemer`
-        // routes a Zemer-search album open through the server's `/album` endpoint, and `playlistId`
-        // carries the search card's OP playlist id (the server's album header may omit one).
         route = "album/{albumId}?zemer={zemer}&playlistId={playlistId}",
-        arguments =
-        listOf(
-            navArgument("albumId") {
-                type = NavType.StringType
-            },
-            navArgument("zemer") {
-                type = NavType.BoolType
-                defaultValue = false
-            },
-            navArgument("playlistId") {
-                type = NavType.StringType
-                nullable = true
-            },
+        arguments = listOf(
+            navArgument("albumId") { type = NavType.StringType },
+            navArgument("zemer") { type = NavType.BoolType; defaultValue = false },
+            navArgument("playlistId") { type = NavType.StringType; nullable = true },
         ),
-    ) {
-        AlbumScreen(navController, scrollBehavior)
-    }
+    ) { AlbumScreen(navController, scrollBehavior) }
     composable(
         route = "artist/{artistId}?isPodcastChannel={isPodcastChannel}&kidZone={kidZone}",
-        arguments =
-        listOf(
-            navArgument("artistId") {
-                type = NavType.StringType
-            },
-            navArgument("isPodcastChannel") {
-                type = NavType.BoolType
-                defaultValue = false
-            },
-            // KidZone navigation context - see the online_podcast route.
-            navArgument("kidZone") {
-                type = NavType.BoolType
-                defaultValue = false
-            },
+        arguments = listOf(
+            navArgument("artistId") { type = NavType.StringType },
+            navArgument("isPodcastChannel") { type = NavType.BoolType; defaultValue = false },
+            navArgument("kidZone") { type = NavType.BoolType; defaultValue = false },
         ),
     ) {
-        // A podcast HOST-channel page is podcast content; music artist pages are untouched.
-        if (it.arguments?.getBoolean("isPodcastChannel") == true &&
-            podcastsBlockedRedirect(navController)
-        ) {
-            return@composable
-        }
+        if (it.arguments?.getBoolean("isPodcastChannel") == true && podcastsBlockedRedirect(navController)) return@composable
         ArtistScreen(navController, scrollBehavior)
     }
-    // The full-screen status story viewer, opened from the Home "Music Status" row by the tapped
-    // creator's STABLE id (the creators list comes from the shared session cache; the viewer resolves
-    // the id to the current index, which survives a process-death re-fetch under the recency sort).
     composable(
         route = "story/{creatorId}",
-        arguments = listOf(
-            navArgument("creatorId") { type = NavType.StringType }
-        )
+        arguments = listOf(navArgument("creatorId") { type = NavType.StringType }),
     ) { backStackEntry ->
         val creatorId = backStackEntry.arguments?.getString("creatorId") ?: return@composable
         StoryScreen(navController, creatorId)
     }
     composable(
-        // Optional `zemer` flag (default false) routes a Zemer-search playlist open through the
-        // server's `/playlist` endpoint; `community` (default false) tags its plays `community:<id>`
-        // (discovery-sourced community lists) instead of `playlist:<id>`. Plain links keep both defaults.
         route = "online_playlist/{playlistId}?zemer={zemer}&community={community}",
-        arguments =
-        listOf(
-            navArgument("playlistId") {
-                type = NavType.StringType
-            },
-            navArgument("zemer") {
-                type = NavType.BoolType
-                defaultValue = false
-            },
-            navArgument("community") {
-                type = NavType.BoolType
-                defaultValue = false
-            },
+        arguments = listOf(
+            navArgument("playlistId") { type = NavType.StringType },
+            navArgument("zemer") { type = NavType.BoolType; defaultValue = false },
+            navArgument("community") { type = NavType.BoolType; defaultValue = false },
         ),
-    ) {
-        OnlinePlaylistScreen(navController, scrollBehavior)
-    }
+    ) { OnlinePlaylistScreen(navController, scrollBehavior) }
     composable(
-        // A hand-curated "Zemer Playlists" entry; {playlistId} is a server slug (e.g. "shabbos"),
-        // never a YouTube playlist id, so it gets its own screen instead of online_playlist.
         route = "zemer_playlist/{playlistId}",
-        arguments =
-        listOf(
-            navArgument("playlistId") {
-                type = NavType.StringType
-            },
-        ),
-    ) {
-        ZemerCuratedPlaylistScreen(navController, scrollBehavior)
-    }
+        arguments = listOf(navArgument("playlistId") { type = NavType.StringType }),
+    ) { ZemerCuratedPlaylistScreen(navController, scrollBehavior) }
     composable(
         route = "local_playlist/{playlistId}",
-        arguments =
-        listOf(
-            navArgument("playlistId") {
-                type = NavType.StringType
-            },
-        ),
-    ) {
-        LocalPlaylistScreen(navController, scrollBehavior)
-    }
+        arguments = listOf(navArgument("playlistId") { type = NavType.StringType }),
+    ) { LocalPlaylistScreen(navController, scrollBehavior) }
     composable(
         route = "auto_playlist/{playlist}",
-        arguments =
-        listOf(
-            navArgument("playlist") {
-                type = NavType.StringType
-            },
-        ),
-    ) {
-        AutoPlaylistScreen(navController, scrollBehavior)
-    }
+        arguments = listOf(navArgument("playlist") { type = NavType.StringType }),
+    ) { AutoPlaylistScreen(navController, scrollBehavior) }
     composable(
         route = "cache_playlist/{playlist}",
-        arguments =
-            listOf(
-                navArgument("playlist") {
-                    type = NavType.StringType
-            },
-        ),
-    ) {
-        CachePlaylistScreen(navController, scrollBehavior)
-    }
-    composable(route = "downloaded_content") {
-        DownloadedContentScreen(navController, scrollBehavior)
-    }
-    composable(route = "status_downloads") {
-        StatusDownloadsScreen(navController, scrollBehavior)
-    }
+        arguments = listOf(navArgument("playlist") { type = NavType.StringType }),
+    ) { CachePlaylistScreen(navController, scrollBehavior) }
+    composable(route = "downloaded_content") { DownloadedContentScreen(navController, scrollBehavior) }
+    composable(route = "status_downloads") { StatusDownloadsScreen(navController, scrollBehavior) }
     composable(
         route = "saved_status/{creatorId}?start={start}",
         arguments = listOf(
             navArgument("creatorId") { type = NavType.StringType },
-            navArgument("start") {
-                type = NavType.StringType
-                defaultValue = ""
-            },
+            navArgument("start") { type = NavType.StringType; defaultValue = "" },
         ),
     ) {
-        SavedStatusScreen(
-            navController,
-            initialCreatorId = it.arguments?.getString("creatorId").orEmpty(),
-            startId = it.arguments?.getString("start")?.ifBlank { null },
-        )
+        SavedStatusScreen(navController, it.arguments?.getString("creatorId").orEmpty(), it.arguments?.getString("start")?.ifBlank { null })
     }
-    composable(route = "downloaded_videos") {
-        DownloadedVideosScreen(navController, scrollBehavior)
-    }
+    composable(route = "downloaded_videos") { DownloadedVideosScreen(navController, scrollBehavior) }
     composable(
         route = "top_playlist/{top}",
-        arguments =
-        listOf(
-            navArgument("top") {
-                type = NavType.StringType
-            },
-        ),
-    ) {
-        TopPlaylistScreen(navController, scrollBehavior)
-    }
-    composable("settings") {
-        SettingsScreen(navController, scrollBehavior, latestVersionName)
-    }
-    composable("settings/android_auto") {
-        AndroidAutoSettings(navController, scrollBehavior)
-    }
+        arguments = listOf(navArgument("top") { type = NavType.StringType }),
+    ) { TopPlaylistScreen(navController, scrollBehavior) }
+    composable("settings") { SettingsScreen(navController, scrollBehavior, latestVersionName) }
+    composable("settings/android_auto") { AndroidAutoSettings(navController, scrollBehavior) }
     composable(
         route = "settings/appearance?scrollTo={scrollTo}",
-        arguments = listOf(
-            navArgument("scrollTo") {
-                type = NavType.StringType
-                defaultValue = ""
-            },
-        ),
+        arguments = listOf(navArgument("scrollTo") { type = NavType.StringType; defaultValue = "" }),
     ) {
-        AppearanceSettings(
-            navController,
-            scrollBehavior,
-            scrollToStatus = it.arguments?.getString("scrollTo") == "status",
-        )
+        AppearanceSettings(navController, scrollBehavior, scrollToStatus = it.arguments?.getString("scrollTo") == "status")
     }
-    composable("settings/appearance/theme") {
-        ThemeScreen(navController, scrollBehavior)
-    }
-    composable("settings/content") {
-        ContentSettings(navController, scrollBehavior)
-    }
-    composable("settings/player") {
-        PlayerSettings(navController, scrollBehavior)
-    }
-    composable("settings/stream_sources") {
-        StreamSourceSettings(navController, scrollBehavior)
-    }
-    composable("settings/general") {
-        GeneralSettings(navController, scrollBehavior)
-    }
-    composable("settings/dpad") {
-        ButtonSetupScreen(navController, scrollBehavior)
-    }
-    composable("settings/storage") {
-        StorageSettings(navController, scrollBehavior)
-    }
-    composable("settings/offline_search") {
-        OfflineSearchSettings(navController, scrollBehavior)
-    }
-    composable("settings/privacy") {
-        PrivacySettings(navController, scrollBehavior)
-    }
-    composable("settings/backup_restore") {
-        BackupAndRestore(navController, scrollBehavior)
-    }
-    composable("settings/updater") {
-        UpdaterScreen(navController, scrollBehavior)
-    }
+    composable("settings/appearance/theme") { ThemeScreen(navController, scrollBehavior) }
+    composable("settings/content") { ContentSettings(navController, scrollBehavior) }
+    composable("settings/player") { PlayerSettings(navController, scrollBehavior) }
+    composable("settings/stream_sources") { StreamSourceSettings(navController, scrollBehavior) }
+    composable("settings/general") { GeneralSettings(navController, scrollBehavior) }
+    composable("settings/dpad") { ButtonSetupScreen(navController, scrollBehavior) }
+    composable("settings/storage") { StorageSettings(navController, scrollBehavior) }
+    composable("settings/offline_search") { OfflineSearchSettings(navController, scrollBehavior) }
+    composable("settings/privacy") { PrivacySettings(navController, scrollBehavior) }
+    composable("settings/backup_restore") { BackupAndRestore(navController, scrollBehavior) }
+    composable("settings/updater") { UpdaterScreen(navController, scrollBehavior) }
     if (BuildConfig.DEBUG) {
-        // Developer-mode Log viewer — the route itself doesn't exist in release builds.
-        composable("settings/log_viewer") {
-            LogViewerScreen(navController, scrollBehavior)
-        }
+        composable("settings/log_viewer") { LogViewerScreen(navController, scrollBehavior) }
     }
-    composable("settings/about") {
-        AboutScreen(navController, scrollBehavior)
-    }
-    composable("login") {
-        LoginScreen(navController)
-    }
-    composable("login_gate") {
-        LoginGateScreen(navController = navController)
-    }
+    composable("settings/about") { AboutScreen(navController, scrollBehavior) }
+    composable("login") { LoginScreen(navController) }
+    composable("login_gate") { LoginGateScreen(navController = navController) }
 }
