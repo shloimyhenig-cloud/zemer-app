@@ -190,6 +190,8 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 dependencies {
     implementation("com.zemer:cipher")
+    // Build My Collection exports normal MP3 files after Zemer's standard filtered download finishes.
+    implementation("net.qiujuer.lame:lame:1.0.0")
 
     implementation(libs.guava)
     implementation(libs.concurrent.futures)
