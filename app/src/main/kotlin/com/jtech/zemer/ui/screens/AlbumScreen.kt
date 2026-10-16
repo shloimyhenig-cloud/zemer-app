@@ -287,7 +287,8 @@ fun AlbumScreen(
                                 AggregateDownloadButton(
                                     songs = albumWithSongs.songs,
                                     onDownloadAll = {
-                                        albumWithSongs.songs.forEach { downloadUtil.downloadToMediaStore(it) }
+                                        // Zemer Collection: a whole album always downloads as MP3, in track order.
+                                        downloadUtil.downloadToMediaStoreAsMp3(albumWithSongs.songs)
                                     },
                                     onRemoveAll = {
                                         albumWithSongs.songs.forEach { song ->
