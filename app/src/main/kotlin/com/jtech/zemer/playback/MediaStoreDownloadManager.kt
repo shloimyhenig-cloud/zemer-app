@@ -31,6 +31,7 @@ import com.jtech.zemer.db.entities.SongAlbumMap
 import com.jtech.zemer.db.entities.SongArtistMap
 import com.jtech.zemer.utils.CoverArtEmbedder
 import com.jtech.zemer.utils.mp4.AudioRemux
+import com.jtech.zemer.utils.mp3.Mp3TrackMetadata
 import com.jtech.zemer.utils.dataStore
 import com.jtech.zemer.utils.getSuspend
 import com.jtech.zemer.utils.MediaStoreHelper
@@ -134,6 +135,27 @@ constructor(
     // silently downgrade the user's explicit quality), cleared on success/cancel/delete only.
     private val requestedVideoQuality = ConcurrentHashMap<String, String>()
 
+    // Songs whose download must be saved as a real MP3 (Build My Collection). Same lifecycle as
+    // requestedVideoBitrate: survives a failed attempt so a retry still exports MP3; cleared on
+    // success, cancel and delete.
+    private val mp3ExportIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    // Downloads that already returned their network slot to start the next download while their
+    // CPU-bound MP3 encode runs; processQueue's finally must not release the slot a second time.
+    private val slotReleasedEarly: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * The network part of an MP3 export is done: free the download slot so the next song starts
+     * downloading while this one encodes. Skipped when the encoder is already backed up, so finished
+     * downloads can't pile up in the cache faster than they are encoded.
+     */
+    private fun releaseSlotForEncoding(songId: String) {
+        if (!Mp3DownloadExport.hasEncodeCapacity()) return
+        if (!activeDownloads.containsKey(songId) || !slotReleasedEarly.add(songId)) return
+        downloadSemaphore.release()
+        scope.launch { processQueue() }
+    }
+
     private val downloadQueue = mutableListOf<Song>()
     // Touched from several coroutines (processQueue, performDownload's finally, cancel/delete) — must be
     // concurrent or it can corrupt / leak an uncancellable orphan job.
@@ -227,70 +249,93 @@ constructor(
      *
      * @param song The song to download
      */
+    /**
+     * Downloads [song] through the normal path, then re-encodes it to a tagged MP3 saved under
+     * Music/Zemer/<artist>/<album>/ (see [Mp3DownloadExport]). Audio only.
+     */
+    fun downloadSongAsMp3(song: Song) = downloadSongsAsMp3(listOf(song))
+
+    /**
+     * Build My Collection's bulk enqueue: ONE coroutine enqueues [songs] in the given order (album by
+     * album, track by track), so the queue finishes whole albums in turn instead of a random mix that
+     * per-song launches race into.
+     */
+    fun downloadSongsAsMp3(songs: List<Song>) {
+        songs.forEach { mp3ExportIds.add(it.id) }
+        scope.launch {
+            songs.forEach { enqueueSong(it, fromUser = true) }
+        }
+    }
+
     fun downloadSong(song: Song, fromUser: Boolean = false) {
         Timber.d("downloadSong called: id=${song.id}, title=${song.song.title}, isVideo=${song.song.isVideo}")
-        scope.launch {
-            MediaStoreDownloadService.start(context)
-            val currentState = _downloadStates.value[song.id]
-            if (currentState?.status == DownloadState.Status.DOWNLOADING ||
-                currentState?.status == DownloadState.Status.COMPLETED
-            ) {
-                return@launch
-            }
-            // Telemetry: AFTER the no-op check, so a re-tap that enqueues nothing reports nothing;
-            // fromUser=false (retries, self-repair, auto-download-on-like) never reports.
-            if (fromUser) Tracker.action(TrackingActionKind.DOWNLOAD, song.id)
+        scope.launch { enqueueSong(song, fromUser) }
+    }
 
-            // For audio downloads, ensure isVideo is false (song may have been marked as video previously)
-            val audioSong = song.copy(song = song.song.copy(isVideo = false))
+    private suspend fun enqueueSong(song: Song, fromUser: Boolean) {
+        MediaStoreDownloadService.start(context)
+        val currentState = _downloadStates.value[song.id]
+        if (currentState?.status == DownloadState.Status.DOWNLOADING ||
+            currentState?.status == DownloadState.Status.COMPLETED
+        ) {
+            return
+        }
+        // Telemetry: AFTER the no-op check, so a re-tap that enqueues nothing reports nothing;
+        // fromUser=false (retries, self-repair, auto-download-on-like) never reports.
+        if (fromUser) Tracker.action(TrackingActionKind.DOWNLOAD, song.id)
 
-            // Make sure the song and its relations exist in the database so we can flag it
-            // as downloaded later (needed for the Library > Downloaded view).
-            ensureSongPersisted(audioSong)
+        // For audio downloads, ensure isVideo is false (song may have been marked as video previously)
+        val audioSong = song.copy(song = song.song.copy(isVideo = false))
 
-            // Use album artist for consistency with download folder structure
-            val checkArtist = if (audioSong.album != null) {
-                val albumWithArtists = database.albumUnfiltered(audioSong.album.id).first()
-                albumWithArtists?.artists?.firstOrNull()?.name
-                    ?: audioSong.artists.firstOrNull()?.name
-                    ?: "Unknown"
-            } else {
-                audioSong.artists.firstOrNull()?.name ?: "Unknown"
-            }
+        // Make sure the song and its relations exist in the database so we can flag it
+        // as downloaded later (needed for the Library > Downloaded view).
+        ensureSongPersisted(audioSong)
 
-            val existingFile = mediaStoreHelper.findExistingFile(
-                title = audioSong.song.title,
-                artist = checkArtist
+        // Use album artist for consistency with download folder structure
+        val checkArtist = if (audioSong.album != null) {
+            val albumWithArtists = database.albumUnfiltered(audioSong.album.id).first()
+            albumWithArtists?.artists?.firstOrNull()?.name
+                ?: audioSong.artists.firstOrNull()?.name
+                ?: "Unknown"
+        } else {
+            audioSong.artists.firstOrNull()?.name ?: "Unknown"
+        }
+
+        val existingFile = mediaStoreHelper.findExistingFile(
+            title = audioSong.song.title,
+            artist = checkArtist
+        )?.takeUnless { uri ->
+            // An MP3 export must not be satisfied by an existing Opus/AAC copy of the song.
+            audioSong.id in mp3ExportIds && !mediaStoreHelper.isMp3(uri)
+        }
+        if (existingFile != null) {
+            updateDownloadState(
+                audioSong.id,
+                DownloadState(
+                    songId = audioSong.id,
+                    status = DownloadState.Status.COMPLETED,
+                    progress = 1f
+                )
             )
-            if (existingFile != null) {
+            markSongAsDownloaded(audioSong, existingFile.toString())
+            prefetchLyricsIfLikely(audioSong)
+            return
+        }
+
+        synchronized(downloadQueue) {
+            if (!downloadQueue.any { it.id == audioSong.id }) {
+                downloadQueue.add(audioSong)
                 updateDownloadState(
                     audioSong.id,
                     DownloadState(
                         songId = audioSong.id,
-                        status = DownloadState.Status.COMPLETED,
-                        progress = 1f
+                        status = DownloadState.Status.QUEUED
                     )
                 )
-                markSongAsDownloaded(audioSong, existingFile.toString())
-                prefetchLyricsIfLikely(audioSong)
-                return@launch
             }
-
-            synchronized(downloadQueue) {
-                if (!downloadQueue.any { it.id == audioSong.id }) {
-                    downloadQueue.add(audioSong)
-                    updateDownloadState(
-                        audioSong.id,
-                        DownloadState(
-                            songId = audioSong.id,
-                            status = DownloadState.Status.QUEUED
-                        )
-                    )
-                }
-            }
-
-            processQueue()
         }
+
+        processQueue()
     }
 
     /**
@@ -304,6 +349,7 @@ constructor(
             activeDownloads.remove(songId)
             requestedVideoBitrate.remove(songId)
             requestedVideoQuality.remove(songId)
+            mp3ExportIds.remove(songId)
 
             synchronized(downloadQueue) {
                 downloadQueue.removeAll { it.id == songId }
@@ -353,6 +399,7 @@ constructor(
         activeDownloads.remove(songId)
         requestedVideoBitrate.remove(songId)
         requestedVideoQuality.remove(songId)
+        mp3ExportIds.remove(songId)
         synchronized(downloadQueue) {
             downloadQueue.removeAll { it.id == songId }
         }
@@ -396,7 +443,8 @@ constructor(
                 try {
                     performDownload(song)
                 } finally {
-                    downloadSemaphore.release()
+                    // An MP3 export hands its slot back before encoding (see releaseSlotForEncoding).
+                    if (!slotReleasedEarly.remove(song.id)) downloadSemaphore.release()
                     activeDownloads.remove(song.id)
                     // NOTE: do NOT drop the requested video bitrate here. A failed attempt ends in this
                     // finally too, and retryDownload() re-issues downloadVideo(song) with no bitrate — if
@@ -606,7 +654,33 @@ constructor(
                 // Embed metadata if format supports it (audio only). Keyed on the SNIFFED saveExtension,
                 // not the pre-download `extension` (which is the hardcoded "webm" in relay mode) — else a
                 // relay m4a audio download would never get its title/artist/cover art embedded.
-                if (!videoDownload && CoverArtEmbedder.supportsEmbedding(saveExtension)) {
+                // Build My Collection: genuinely re-encode to MP3 (ID3v2.3 tags + cover) instead of
+                // embedding into the original container. The MP3 is what gets saved below.
+                val exportMp3 = !videoDownload && song.id in mp3ExportIds
+                val mp3Metadata = if (exportMp3) {
+                    Mp3TrackMetadata(
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        albumArtist = albumArtistName,
+                        year = year,
+                        trackNumber = trackNumber,
+                        trackTotal = song.album?.songCount?.takeIf { it > 0 },
+                    )
+                } else null
+                val fileToSave = if (mp3Metadata != null) {
+                    releaseSlotForEncoding(song.id)
+                    Mp3DownloadExport.transcode(
+                        context = context,
+                        httpClient = httpClient,
+                        songId = song.id,
+                        source = tempFile,
+                        metadata = mp3Metadata,
+                        thumbnailUrl = song.song.thumbnailUrl,
+                    ).also { saveExtension = "mp3" }
+                } else tempFile
+
+                if (mp3Metadata == null && !videoDownload && CoverArtEmbedder.supportsEmbedding(saveExtension)) {
                     // Lyrics are embedded ONLY when identity-exact: the SimpMusic lookup is keyed by
                     // this videoId (plus its duration sanity check), so the text is the song's by
                     // construction. The fuzzy metadata-search providers never qualify. SimpMusic may
@@ -633,7 +707,7 @@ constructor(
                     )
                 }
 
-                val fileName = "$title.$saveExtension"
+                val fileName = mp3Metadata?.fileName() ?: "$title.$saveExtension"
                 val uri: Uri?
 
                 if (videoDownload) {
@@ -653,7 +727,7 @@ constructor(
                     val mimeType = mediaStoreHelper.getMimeType(saveExtension)
                     Timber.d("AUDIO DOWNLOAD PATH: Saving to Music/Zemer: $fileName, mimeType: $mimeType, extension: $saveExtension, tempFile size: ${tempFile.length()}")
                     uri = mediaStoreHelper.saveFileToMediaStore(
-                        tempFile = tempFile,
+                        tempFile = fileToSave,
                         fileName = fileName,
                         mimeType = mimeType,
                         title = title,
@@ -694,6 +768,7 @@ constructor(
                         ),
                     )
                     markSongAsDownloaded(songWithMeta, uri.toString())
+                    mp3ExportIds.remove(song.id)
                     prefetchLyricsIfLikely(songWithMeta)
                 } else {
                     throw Exception("Failed to save file to MediaStore")
@@ -702,6 +777,7 @@ constructor(
                 if (tempFile.exists()) {
                     tempFile.delete()
                 }
+                Mp3DownloadExport.outputFileFor(context, song.id).delete()
             }
 
         } catch (e: CancellationException) {

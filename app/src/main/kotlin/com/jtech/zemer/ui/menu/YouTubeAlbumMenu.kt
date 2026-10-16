@@ -324,7 +324,7 @@ fun YouTubeAlbumMenu(
                                         .onFailure { reportException(it) }
                                     toDownload = database.albumWithSongs(albumItem.id).first()?.songs.orEmpty()
                                 }
-                                toDownload.forEach { downloadUtil.downloadToMediaStore(it) }
+                                downloadUtil.downloadToMediaStoreAsMp3(toDownload) // whole album as MP3, in track order
                             }
                         },
                         onCancel = { songs.forEach { downloadUtil.cancelMediaStoreDownload(it.id) } },

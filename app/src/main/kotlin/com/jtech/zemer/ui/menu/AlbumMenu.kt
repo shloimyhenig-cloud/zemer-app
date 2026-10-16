@@ -315,7 +315,7 @@ fun AlbumMenu(
                     downloadMenuItem(
                         kind = DownloadMenuLogic.collectionRow(dlStatus),
                         progress = dlProgress,
-                        onDownload = { songs.forEach { downloadUtil.downloadToMediaStore(it) } },
+                        onDownload = { downloadUtil.downloadToMediaStoreAsMp3(songs) }, // whole album as MP3
                         onCancel = { songs.forEach { downloadUtil.cancelMediaStoreDownload(it.id) } },
                         onRetry = { songs.forEach { downloadUtil.retryMediaStoreDownload(it.id) } },
                         onRemove = { coroutineScope.launch { songs.forEach { downloadUtil.removeDownload(it.id) } } },

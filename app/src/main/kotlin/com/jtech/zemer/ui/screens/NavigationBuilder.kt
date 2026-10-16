@@ -15,6 +15,8 @@ import androidx.navigation.navArgument
 import com.jtech.zemer.BuildConfig
 import com.jtech.zemer.ui.screens.artist.ArtistScreen
 import com.jtech.zemer.ui.screens.artist.ArtistSectionScreen
+import com.jtech.zemer.ui.screens.collection.COLLECTION_BUILDER_ROUTE
+import com.jtech.zemer.ui.screens.collection.CollectionBuilderScreen
 import com.jtech.zemer.ui.screens.library.LibraryScreen
 import com.jtech.zemer.ui.screens.statuses.SavedStatusScreen
 import com.jtech.zemer.ui.screens.statuses.StatusDownloadsScreen
@@ -141,6 +143,9 @@ fun NavGraphBuilder.navigationBuilder(
     }
     composable("genres") {
         GenresScreen(navController, scrollBehavior)
+    }
+    composable(COLLECTION_BUILDER_ROUTE) {
+        CollectionBuilderScreen(navController, scrollBehavior)
     }
     composable(
         // {genreId} is a server genre slug ("nigunim"), never a YouTube id — its own screen, like

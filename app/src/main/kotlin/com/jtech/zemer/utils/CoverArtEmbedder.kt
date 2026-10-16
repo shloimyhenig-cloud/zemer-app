@@ -144,7 +144,8 @@ object CoverArtEmbedder {
         }
     }
 
-    private suspend fun downloadArtworkOrNull(thumbnailUrl: String?, httpClient: OkHttpClient): ByteArray? {
+    /** Square, size-capped cover bytes for [thumbnailUrl] (also used by the MP3 export), or null. */
+    suspend fun downloadArtworkOrNull(thumbnailUrl: String?, httpClient: OkHttpClient): ByteArray? {
         if (thumbnailUrl.isNullOrBlank()) return null
         val artwork = withTimeoutOrNull(ARTWORK_DOWNLOAD_TIMEOUT_MS) {
             downloadArtwork(getOptimizedUrl(thumbnailUrl), httpClient)
