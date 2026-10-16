@@ -40,15 +40,14 @@ class CollectionDownloadPlanner(
             }
         }.awaitAll()
 
-        var queued = 0
         var converting = 0
         var alreadyMp3 = 0
+        val toDownload = ArrayList<Song>()
+        // perAlbum keeps the review order and each album's track order, so the queue completes
+        // whole albums one after another.
         perAlbum.filterNotNull().flatten().distinctBy { it.id }.forEach { song ->
             when {
-                !song.song.isDownloaded -> {
-                    downloadUtil.downloadToMediaStoreAsMp3(song)
-                    queued++
-                }
+                !song.song.isDownloaded -> toDownload += song
                 converter.isStoredAsMp3(song) -> alreadyMp3++
                 else -> {
                     converter.enqueue(song)
@@ -56,10 +55,11 @@ class CollectionDownloadPlanner(
                 }
             }
         }
+        downloadUtil.downloadToMediaStoreAsMp3(toDownload)
         Result(
             albums = albums.size,
             failedAlbums = perAlbum.count { it.isNullOrEmpty() },
-            queuedSongs = queued,
+            queuedSongs = toDownload.size,
             convertedSongs = converting,
             alreadyMp3 = alreadyMp3,
         )
