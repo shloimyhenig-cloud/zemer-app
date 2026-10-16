@@ -479,6 +479,8 @@
     <string name="collection_stage_popular">Checking what\'s popular…</string>
     <string name="collection_stage_checking">Making sure they\'re complete albums…</string>
     <string name="collection_stage_ranking">Ranking albums…</string>
+    <string name="collection_all_cds_by">All CDs by %1$s</string>
+    <string name="collection_recommended_for_you">Recommended for you</string>
     <string name="collection_select_all">Select all</string>
     <string name="collection_select_none">Select none</string>
     <string name="collection_checked_count">%1$d of %2$d albums checked</string>

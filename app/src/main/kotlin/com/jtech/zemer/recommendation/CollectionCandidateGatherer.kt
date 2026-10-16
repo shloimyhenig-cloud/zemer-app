@@ -158,7 +158,9 @@ class CollectionCandidateGatherer(
         // only known from a related track). Only the likely winners are opened, to bound network use.
         onStage(GatherStage.CHECKING_ALBUMS)
         val eraCenter = CollectionRecommender.seedEraCenter(seeds)
-        val verifyPool = (preferences.clampedTarget * limits.verifyPoolFactor).toInt()
+        // Every CD of a picked singer is listed, so all of them are checked, plus the discovery pool.
+        val verifyPool = (preferences.clampedTarget * limits.verifyPoolFactor).toInt() +
+            pool.values.count { it.inPickedArtistDiscography }
         pool.values
             .filter { !it.album.isSingle && it.album.id !in downloadedIds }
             .sortedByDescending { CollectionRecommender.score(it, preferences, eraCenter, currentYear).rawScore }

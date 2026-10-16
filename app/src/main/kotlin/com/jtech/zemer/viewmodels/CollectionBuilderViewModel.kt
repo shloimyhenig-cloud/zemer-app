@@ -263,6 +263,10 @@ class CollectionBuilderViewModel @Inject constructor(
         }
     }
 
+    fun setChecked(albumIds: Collection<String>, checked: Boolean) {
+        _state.update { s -> s.copy(checkedAlbumIds = if (checked) s.checkedAlbumIds + albumIds else s.checkedAlbumIds - albumIds.toSet()) }
+    }
+
     fun setAllChecked(checked: Boolean) {
         _state.update { s ->
             s.copy(checkedAlbumIds = if (checked) s.recommendations.mapTo(LinkedHashSet()) { it.album.id } else emptySet())

@@ -87,11 +87,19 @@ class CollectionRecommenderTest {
     // --- Behavior -------------------------------------------------------------------------------------
 
     @Test
-    fun `picked albums lead the list and every result is a full album`() {
+    fun `every CD of a picked singer is listed under that singer, newest first, then the discoveries`() {
         val result = run()
         val ids = result.map { it.album.id }
-        assertTrue(ids.take(2).containsAll(listOf("fried5", "kem1")))
-        assertTrue(result.first().reasons.contains(RecommendationReason.YOUR_PICK))
+        val friedIds = friedAlbums.map { it.id }
+        val shwekeyIds = shwekeyAlbums.map { it.id }
+        // All 20 Fried and all 10 Shwekey albums, uncapped, singers in pick order.
+        assertEquals(friedIds.reversed() + shwekeyIds.reversed(), ids.take(30))
+        assertTrue(result.take(30).all { it.pickedSinger != null })
+        assertEquals(fried, result.first().pickedSinger)
+        // The picked album by a non-picked singer still leads the discoveries.
+        assertEquals("kem1", result[30].album.id)
+        assertTrue(result[30].reasons.contains(RecommendationReason.YOUR_PICK))
+        assertTrue(result.drop(30).none { it.pickedSinger != null })
         assertFalse("singles never offered", "friedSingle" in ids)
         assertEquals(ids.size, ids.toSet().size)
     }
@@ -158,11 +166,12 @@ class CollectionRecommenderTest {
         val result = run(catalog)
         assertTrue(result.isNotEmpty())
         assertTrue(result.any { it.album.id == "fried5" }) // the pick survives
+        assertTrue(result.none { it.pickedSinger != null }) // no discography could be read
     }
 
     @Test
     fun `target count is respected and clamped to the 60-100 range`() {
-        assertTrue(run(preferences = CollectionPreferences(targetCount = 5)).size <= 60)
+        assertTrue(run(preferences = CollectionPreferences(targetCount = 5)).count { it.pickedSinger == null } <= 60)
         assertEquals(60, CollectionPreferences(targetCount = 5).clampedTarget)
         assertEquals(100, CollectionPreferences(targetCount = 500).clampedTarget)
     }
@@ -171,7 +180,7 @@ class CollectionRecommenderTest {
     fun `only the likely winners are opened for verification`() {
         val catalog = FakeCatalog()
         run(catalog, CollectionPreferences(targetCount = 60))
-        assertTrue(catalog.opened.size <= 96)
+        assertTrue(catalog.opened.size <= 96 + 30) // discovery pool + every picked-singer CD
     }
 
     @Test

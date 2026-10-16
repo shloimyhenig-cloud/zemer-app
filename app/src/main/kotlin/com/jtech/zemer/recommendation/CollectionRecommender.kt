@@ -66,16 +66,28 @@ object CollectionRecommender {
                     .thenBy { it.evidence.album.title.lowercase() }
                     .thenBy { it.evidence.album.id },
             )
-        val selected = selectDiverse(eligible, seeds, preferences.clampedTarget)
-        val top = selected.maxOfOrNull { it.rawScore }?.coerceAtLeast(1) ?: 1
-        return selected.map { scored ->
-            AlbumRecommendation(
-                album = scored.evidence.album,
-                score = (scored.rawScore * 100 / top).coerceIn(1, 100),
-                reasons = scored.reasons,
-                trackCount = scored.evidence.trackCount,
-            )
-        }
+        // Every CD of a singer the user picked is listed (no cap, old and new) so the user can tick
+        // exactly the ones they want; the target count applies to the discovery recommendations only.
+        val pickedSingers = seeds.artists.filter { it.id != null }
+        fun singerOf(e: AlbumEvidence): CatalogArtist? =
+            pickedSingers.firstOrNull { it.id in e.album.artistIds }
+        val (singerAlbums, others) = eligible.partition { it.evidence.inPickedArtistDiscography && singerOf(it.evidence) != null }
+        val discovered = selectDiverse(others, seeds, preferences.clampedTarget)
+        val top = (singerAlbums + discovered).maxOfOrNull { it.rawScore }?.coerceAtLeast(1) ?: 1
+        fun Scored.toRecommendation() = AlbumRecommendation(
+            album = this.evidence.album,
+            score = (rawScore * 100 / top).coerceIn(1, 100),
+            reasons = reasons,
+            trackCount = this.evidence.trackCount,
+            pickedSinger = singerOf(this.evidence)?.takeIf { this.evidence.inPickedArtistDiscography },
+        )
+        // Singers in the order they were picked; each singer's CDs newest first (unknown year last).
+        val bySinger = singerAlbums.sortedWith(
+            compareBy<Scored> { s -> pickedSingers.indexOfFirst { it.id in s.evidence.album.artistIds } }
+                .thenByDescending { it.evidence.album.year ?: Int.MIN_VALUE }
+                .thenBy { it.evidence.album.title.lowercase() },
+        )
+        return bySinger.map { it.toRecommendation() } + discovered.map { it.toRecommendation() }
     }
 
     /** A complete CD: not a single/EP, and (when the track list is known) at least a few songs. */

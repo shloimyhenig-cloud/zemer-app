@@ -105,4 +105,9 @@ data class AlbumRecommendation(
     val score: Int,
     val reasons: List<RecommendationReason>,
     val trackCount: Int?,
+    /**
+     * Set when this is one of the CDs of a singer the user picked: the review screen lists every such
+     * CD (old and new, uncapped) under that singer, apart from the recommendations.
+     */
+    val pickedSinger: CatalogArtist? = null,
 )

@@ -42,6 +42,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.jtech.zemer.LocalPlayerAwareWindowInsets
 import com.jtech.zemer.R
+import com.jtech.zemer.recommendation.AlbumRecommendation
 import com.jtech.zemer.recommendation.CollectionPreferences
 import com.jtech.zemer.ui.component.AppBarTitle
 import com.jtech.zemer.ui.component.BackTopAppBar
@@ -272,17 +273,71 @@ private fun LazyListScope.reviewContent(state: CollectionBuilderUiState, viewMod
                 TextButton(onClick = { viewModel.setAllChecked(false) }) { Text(stringResource(R.string.collection_select_none)) }
             }
         }
-        items(state.recommendations, key = { "rec_${it.album.id}" }) { recommendation ->
-            RecommendationRow(
-                recommendation = recommendation,
-                checked = recommendation.album.id in state.checkedAlbumIds,
-                onToggle = { viewModel.toggleAlbum(recommendation.album.id) },
-            )
+        // Every CD of each picked singer (old and new), grouped under that singer...
+        state.recommendations.filter { it.pickedSinger != null }
+            .groupBy { it.pickedSinger!! }
+            .forEach { (singer, albums) ->
+                item(key = "singer_${singer.id ?: singer.name}") {
+                    GroupHeader(
+                        title = stringResource(R.string.collection_all_cds_by, singer.name),
+                        checked = albums.count { it.album.id in state.checkedAlbumIds },
+                        total = albums.size,
+                        onSetAll = { checked -> viewModel.setChecked(albums.map { it.album.id }, checked) },
+                    )
+                }
+                recommendationItems(albums, state, viewModel)
+            }
+        // ...then the discoveries.
+        val discovered = state.recommendations.filter { it.pickedSinger == null }
+        if (discovered.isNotEmpty()) {
+            item(key = "discovered_header") {
+                GroupHeader(
+                    title = stringResource(R.string.collection_recommended_for_you),
+                    checked = discovered.count { it.album.id in state.checkedAlbumIds },
+                    total = discovered.size,
+                    onSetAll = { checked -> viewModel.setChecked(discovered.map { it.album.id }, checked) },
+                )
+            }
+            recommendationItems(discovered, state, viewModel)
         }
     } else if (!state.isGenerating && state.message == null) {
         item(key = "empty") {
             EmptyPlaceholder(icon = R.drawable.album, text = stringResource(R.string.collection_no_recommendations))
         }
+    }
+}
+
+private fun LazyListScope.recommendationItems(
+    albums: List<AlbumRecommendation>,
+    state: CollectionBuilderUiState,
+    viewModel: CollectionBuilderViewModel,
+) {
+    items(albums, key = { "rec_${it.album.id}" }) { recommendation ->
+        RecommendationRow(
+            recommendation = recommendation,
+            checked = recommendation.album.id in state.checkedAlbumIds,
+            onToggle = { viewModel.toggleAlbum(recommendation.album.id) },
+        )
+    }
+}
+
+/** A section title with its own select-all / select-none, so one singer's CDs can be (un)ticked at once. */
+@Composable
+private fun GroupHeader(title: String, checked: Int, total: Int, onSetAll: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Text(
+                stringResource(R.string.collection_checked_count, checked, total),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = { onSetAll(true) }) { Text(stringResource(R.string.collection_select_all)) }
+        TextButton(onClick = { onSetAll(false) }) { Text(stringResource(R.string.collection_select_none)) }
     }
 }
 
